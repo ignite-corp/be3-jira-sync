@@ -2,9 +2,6 @@
 
 import { JiraIssue } from '@/lib/types/jira';
 import { SyncOptions, SyncSummary, SyncResult, SyncLog, SyncTargetProject } from './types';
-
-// 고정 분류 규칙(issuelinks/[GW]/[HB] 에픽 접두사)을 갖는 대상 — 그 외는 DB 프로필 기반 일반 분류
-const FIXED_TARGETS = new Set<string>(['KQ', 'HDD', 'AUTOWAY', 'HMGBOARD']);
 import { SyncLogger } from './logger';
 import { IgniteSyncService } from './ignite-sync.service';
 import { HMGSyncService } from './hmg-sync.service';
@@ -21,6 +18,9 @@ import { clearTransitionCache } from './transition-helper';
 import { clearEpicCache } from './epic-resolver';
 import { jira } from '@/lib/services/jira';
 import { dbServer } from '@/lib/db';
+
+// 고정 분류 규칙(issuelinks/[GW]/[HB] 에픽 접두사)을 갖는 대상 — 그 외는 DB 프로필 기반 일반 분류
+const FIXED_TARGETS = new Set<string>(['KQ', 'HDD', 'AUTOWAY', 'HMGBOARD']);
 
 /**
  * 동기화 오케스트레이터
@@ -340,10 +340,15 @@ export class SyncOrchestrator {
     }> = [];
     for (const target of targetProjects) {
       if (FIXED_TARGETS.has(target)) continue;
-      const profile = await this.findHmgProfileByTarget(target);
+      let profile = await this.findHmgProfileByTarget(target);
+      if (!profile) {
+        // HMG 프로필이 없으면 인스턴스 무관 프로필 조회 (Ignite 대상 포함)
+        const profileId = await this.findProfileForTarget(target);
+        if (profileId) profile = await getSyncProfileInfo(profileId);
+      }
       if (!profile) {
         this.logger.warning(
-          `${target}: HMG 동기화 프로필을 찾을 수 없어 분류에서 제외됩니다`
+          `${target}: 동기화 프로필을 찾을 수 없어 분류에서 제외됩니다`
         );
         continue;
       }
@@ -413,9 +418,22 @@ export class SyncOrchestrator {
       }
 
       // 4. 그 외 대상: DB 프로필 기반 일반 분류
-      //    link field에 대상 티켓 링크가 있거나 허용 에픽에 부합하면 대상
-      //    (sync_profile_allowed_epics가 비어있으면 모든 티켓이 대상)
+      //    - Ignite 대상: KQ/HDD와 동일하게 Blocks 링크 prefix로 분류 (링크 기반 업데이트 동기화)
+      //    - HMG 대상: link field에 대상 티켓 링크가 있거나 허용 에픽에 부합하면 대상
+      //      (sync_profile_allowed_epics가 비어있으면 모든 티켓이 대상)
       for (const { target, profile, allowedEpics } of genericTargets) {
+        if (profile.targetInstance !== 'hmg') {
+          const hasBlocksLink = (ticket.fields.issuelinks ?? []).some(
+            (link) =>
+              link.type.name === 'Blocks' &&
+              link.outwardIssue?.key.startsWith(`${profile.targetProjectKey}-`)
+          );
+          if (hasBlocksLink) {
+            targets.push(target);
+          }
+          continue;
+        }
+
         const rawLink = profile.linkField
           ? ticket.fields[profile.linkField]
           : undefined;
