@@ -43,7 +43,7 @@ export default function CreateTicketPage() {
   const { currentUser } = useCurrentUser();
 
   // 에픽 목록
-  const [fehgEpics, setFehgEpics] = useState<JiraIssue[]>([]);
+  const [sourceEpics, setSourceEpics] = useState<JiraIssue[]>([]);
   const [isLoadingEpics, setIsLoadingEpics] = useState(false);
 
   // 입력 필드
@@ -68,16 +68,18 @@ export default function CreateTicketPage() {
   const [showAIForm, setShowAIForm] = useState(false);
 
   // 소속팀 기준 프로젝트 키
-  const sourceProject = currentUser?.sourceProject || 'FEHG';
+  const sourceProject = currentUser?.sourceProject || '';
 
   // 기준 프로젝트의 완료되지 않은 에픽 조회 (페이지 로드 시)
   useEffect(() => {
+    if (!sourceProject) return;
+
     const loadEpics = async () => {
       setIsLoadingEpics(true);
       try {
-        const result = await jira.ignite.getFEHGIncompleteEpics(sourceProject);
+        const result = await jira.ignite.getIncompleteEpicsByProject(sourceProject);
         if (result.success && result.data) {
-          setFehgEpics(result.data.issues);
+          setSourceEpics(result.data.issues);
         } else {
           toast.error('에픽 목록을 불러올 수 없습니다.');
         }
@@ -123,6 +125,10 @@ export default function CreateTicketPage() {
     }
     if (!currentUser) {
       toast.error('사용자가 선택되지 않았습니다.');
+      return;
+    }
+    if (!sourceProject) {
+      toast.error('소스 프로젝트가 설정되지 않았습니다. 팀의 기준 프로젝트를 먼저 설정해주세요.');
       return;
     }
     // 최초추정치 입력했으면 형식 검증
@@ -293,7 +299,7 @@ export default function CreateTicketPage() {
       return;
     }
 
-    // 티켓 키에서 번호 추출 (예: FEHG-1234 → 1234)
+    // 티켓 키에서 번호 추출 (예: BE3-1234 → 1234)
     const ticketIdMatch = createdTicketKey.match(new RegExp(`${sourceProject}-(\\d+)`));
     if (!ticketIdMatch) {
       toast.error('올바르지 않은 티켓 키 형식입니다.');
@@ -314,6 +320,7 @@ export default function CreateTicketPage() {
       const summary = await orchestrator.execute({
         assigneeAccountId: currentUser.igniteAccountId,
         ticketId,
+        sourceProjectKey: sourceProject,
         chunkSize: 15,
       });
 
@@ -396,7 +403,7 @@ export default function CreateTicketPage() {
                   />
                 </SelectTrigger>
                 <SelectContent>
-                  {fehgEpics
+                  {sourceEpics
                     .slice()
                     .sort((a, b) => {
                       // 1. 제목 기준 오름차순
@@ -418,7 +425,7 @@ export default function CreateTicketPage() {
                     ))}
                 </SelectContent>
               </Select>
-              {fehgEpics.length === 0 && !isLoadingEpics && (
+              {sourceEpics.length === 0 && !isLoadingEpics && (
                 <p className="text-xs text-muted-foreground">
                   진행 중인 에픽이 없습니다.
                 </p>

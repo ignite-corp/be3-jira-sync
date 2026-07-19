@@ -14,7 +14,7 @@ export interface AppUser {
   name: string;
   teamId: string | null;
   teamName: string | null;
-  sourceProject: string | null; // 팀의 기준 프로젝트 키 (예: 'FEHG')
+  sourceProject: string | null; // 팀의 기준 프로젝트 키 (예: 'BE3')
   igniteAccountId: string;
   igniteJiraEmail: string;
   igniteJiraApiToken: string;

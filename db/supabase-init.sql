@@ -59,6 +59,7 @@ CREATE TABLE sync_profiles (
   target_project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
   link_field TEXT,
   source_link_field TEXT,
+  use_epic_prefix BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

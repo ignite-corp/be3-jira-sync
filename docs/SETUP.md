@@ -257,7 +257,7 @@ schedule:
 | 컬럼 | 타입 | 설명 |
 |------|------|------|
 | `id` | UUID (PK) | 프로젝트 ID |
-| `name` | TEXT | 프로젝트 이름 (예: FEHG, KQ) |
+| `name` | TEXT | 프로젝트 이름 (예: BE3, GIDPDVO) |
 | `jira_project_id` | TEXT | Jira 프로젝트 ID (UNIQUE) |
 | `jira_instance` | TEXT | Jira 인스턴스 (`'ignite'` / `'hmg'`) |
 | `board_id` | INTEGER | Jira 애자일 보드 ID |
@@ -331,7 +331,7 @@ schedule:
 | 컬럼 | 타입 | 설명 |
 |------|------|------|
 | `profile_id` | UUID (FK → sync_profiles) | 소속 프로필 |
-| `epic_key` | TEXT | 에픽 이슈 키 (예: `FEHG-100`) |
+| `epic_key` | TEXT | 에픽 이슈 키 (예: `BE3-100`) |
 | `epic_summary` | TEXT | 에픽 제목 |
 
 > 이 목록이 비어있으면 모든 에픽이 동기화 대상입니다.

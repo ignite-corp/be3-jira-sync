@@ -12,29 +12,22 @@ export class IgniteJiraService extends BaseJiraService {
   /**
    * 소스 프로젝트 이슈 조회
    */
-  async getSourceProjectIssues(projectKey: string = 'FEHG') {
+  async getSourceProjectIssues(projectKey: string) {
     return this.getProjectIssues(projectKey);
   }
 
   /**
    * 소스 프로젝트의 완료되지 않은 에픽 조회
    */
-  async getIncompleteEpicsByProject(projectKey: string = 'FEHG') {
+  async getIncompleteEpicsByProject(projectKey: string) {
     const jql = `project = ${projectKey} AND issuetype = 에픽 AND status != Done AND status != 완료 ORDER BY created DESC`;
     return this.searchIssues(jql);
   }
 
   /**
-   * @deprecated getFEHGIncompleteEpics → getIncompleteEpicsByProject 사용
-   */
-  async getFEHGIncompleteEpics(projectKey: string = 'FEHG') {
-    return this.getIncompleteEpicsByProject(projectKey);
-  }
-
-  /**
    * 특정 프로젝트를 제외한 모든 프로젝트 조회
    */
-  async getProjectsExcluding(excludeKey: string = 'FEHG') {
+  async getProjectsExcluding(excludeKey: string) {
     const result = await this.getProjects();
     if (result.success && result.data) {
       return {
@@ -43,13 +36,6 @@ export class IgniteJiraService extends BaseJiraService {
       };
     }
     return result;
-  }
-
-  /**
-   * @deprecated getNonFEHGProjects → getProjectsExcluding 사용
-   */
-  async getNonFEHGProjects() {
-    return this.getProjectsExcluding('FEHG');
   }
 
   /**

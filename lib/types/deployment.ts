@@ -25,7 +25,7 @@ export type ProjectKey = 'groupware' | 'hmg-board' | 'cpo';
 export interface ApplyDeploymentTagRequest {
   /** 프로젝트 키 */
   project: ProjectKey;
-  /** 티켓 키 목록 (예: ['FEHG-1234', 'FEHG-1235']) */
+  /** 티켓 키 목록 (예: ['BE3-1234', 'BE3-1235']) */
   ticketKeys: string[];
   /** 배포 태그 (예: '2025-01-15-hotfix') */
   tag: string;

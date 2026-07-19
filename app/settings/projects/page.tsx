@@ -378,7 +378,7 @@ export default function ProjectsPage() {
             </label>
             <div className="flex gap-2">
               <Input
-                placeholder="FEHG"
+                placeholder="BE3"
                 value={form.jiraProjectKey}
                 onChange={(e) => updateForm('jiraProjectKey', e.target.value.toUpperCase())}
                 onKeyDown={(e) => {

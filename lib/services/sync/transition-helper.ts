@@ -1,9 +1,9 @@
 /**
  * 동적 상태 전이(Transition) 헬퍼
+ * DB sync_profile 매핑 기반으로 소스 상태 → 타겟 상태 전이를 수행
  * BFS를 사용하여 현재 상태에서 타겟 상태까지의 최단 경로를 찾아 순차 실행
  */
 
-import { STATUS_WORKFLOW, STATUS_TARGET_MAPPING } from '@/lib/constants/jira';
 import { dbServer } from '@/lib/db';
 
 export type JiraInstance = 'ignite' | 'hmg';
@@ -115,17 +115,17 @@ export async function findTransitionPathFromDb(
 export async function syncStatusWithPathFromDb(
   profileId: string,
   issueKey: string,
-  fehgStatusId: string,
+  sourceStatusId: string,
   currentTargetStatusId: string,
   executeTransition: (issueKey: string, transitionId: string) => Promise<{ success: boolean; error?: string }>,
   logger?: { info: (msg: string) => void; error: (msg: string) => void; success: (msg: string) => void },
   getAvailableTransitions?: (issueKey: string) => Promise<Array<{ id: string; to: { id: string; name: string } }>>
 ): Promise<TransitionResult> {
   const mapping = await getDbStatusMapping(profileId);
-  const targetStatusId = mapping[fehgStatusId] || null;
+  const targetStatusId = mapping[sourceStatusId] || null;
 
   if (!targetStatusId) {
-    const error = `${fehgStatusId}: 매핑된 타겟 상태 없음 (DB)`;
+    const error = `${sourceStatusId}: 매핑된 타겟 상태 없음 (DB)`;
     logger?.error(`${issueKey}: ${error}`);
     return { success: false, stepsExecuted: 0, error };
   }
@@ -252,74 +252,6 @@ interface TransitionResult {
 }
 
 /**
- * BFS로 현재 상태에서 타겟 상태까지의 최단 경로 탐색
- */
-export function findTransitionPath(
-  instance: JiraInstance,
-  currentStatusId: string,
-  targetStatusId: string
-): TransitionPath | null {
-  // 이미 타겟 상태인 경우
-  if (currentStatusId === targetStatusId) {
-    return { statusPath: [], transitionPath: [] };
-  }
-
-  const workflow = STATUS_WORKFLOW[instance.toUpperCase() as 'IGNITE' | 'HMG'];
-  if (!workflow) {
-    return null;
-  }
-
-  // BFS 탐색
-  const queue: Array<{ statusId: string; path: string[]; transitions: string[] }> = [
-    { statusId: currentStatusId, path: [], transitions: [] },
-  ];
-  const visited = new Set<string>([currentStatusId]);
-
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    const nextTransitions = workflow[current.statusId];
-
-    if (!nextTransitions) continue;
-
-    for (const [nextStatusId, transitionId] of Object.entries(nextTransitions)) {
-      if (visited.has(nextStatusId)) continue;
-
-      const newPath = [...current.path, nextStatusId];
-      const newTransitions = [...current.transitions, transitionId];
-
-      // 타겟 도달
-      if (nextStatusId === targetStatusId) {
-        return {
-          statusPath: newPath,
-          transitionPath: newTransitions,
-        };
-      }
-
-      visited.add(nextStatusId);
-      queue.push({
-        statusId: nextStatusId,
-        path: newPath,
-        transitions: newTransitions,
-      });
-    }
-  }
-
-  // 경로 없음
-  return null;
-}
-
-/**
- * FEHG 상태 ID를 타겟 인스턴스의 상태 ID로 매핑
- */
-export function getTargetStatusId(
-  instance: JiraInstance,
-  fehgStatusId: string
-): string | null {
-  const mapping = STATUS_TARGET_MAPPING[instance.toUpperCase() as 'IGNITE' | 'HMG'];
-  return mapping?.[fehgStatusId] || null;
-}
-
-/**
  * 순차적으로 transition 실행
  * @param issueKey 이슈 키
  * @param transitionPath 실행할 transition ID 목록
@@ -378,56 +310,4 @@ export async function executeTransitionPath(
     stepsExecuted,
     finalStatusId,
   };
-}
-
-/**
- * 상태 동기화 통합 함수
- * FEHG 상태 ID를 받아서 타겟 인스턴스의 이슈를 해당 상태로 전이
- */
-export async function syncStatusWithPath(
-  instance: JiraInstance,
-  issueKey: string,
-  fehgStatusId: string,
-  currentTargetStatusId: string,
-  executeTransition: (issueKey: string, transitionId: string) => Promise<{ success: boolean; error?: string }>,
-  logger?: { info: (msg: string) => void; error: (msg: string) => void; success: (msg: string) => void }
-): Promise<TransitionResult> {
-  // 1. FEHG 상태 → 타겟 상태 매핑
-  const targetStatusId = getTargetStatusId(instance, fehgStatusId);
-
-  if (!targetStatusId) {
-    const error = `${fehgStatusId}: 매핑된 타겟 상태 없음`;
-    logger?.error(`${issueKey}: ${error}`);
-    return { success: false, stepsExecuted: 0, error };
-  }
-
-  // 2. 이미 타겟 상태인 경우 스킵
-  if (currentTargetStatusId === targetStatusId) {
-    logger?.info(`${issueKey}: 이미 타겟 상태 (${targetStatusId})`);
-    return { success: true, stepsExecuted: 0, finalStatusId: targetStatusId };
-  }
-
-  // 3. 경로 탐색
-  const path = findTransitionPath(instance, currentTargetStatusId, targetStatusId);
-
-  if (!path) {
-    const error = `${currentTargetStatusId} → ${targetStatusId}: 전이 경로 없음`;
-    logger?.error(`${issueKey}: ${error}`);
-    return { success: false, stepsExecuted: 0, error };
-  }
-
-  logger?.info(
-    `${issueKey}: 상태 전이 경로 발견 (${path.transitionPath.length}단계: ${path.transitionPath.join(' → ')})`
-  );
-
-  // 4. 순차 실행
-  const result = await executeTransitionPath(issueKey, path.transitionPath, executeTransition);
-
-  if (result.success) {
-    logger?.success(`${issueKey}: 상태 동기화 완료 (${result.stepsExecuted}단계 실행)`);
-  } else {
-    logger?.error(`${issueKey}: 상태 동기화 실패 - ${result.error}`);
-  }
-
-  return result;
 }

@@ -11,7 +11,8 @@ function getResend(): Resend {
   return _resend;
 }
 
-const NOTIFY_EMAIL = 'fedev1@ignite.co.kr';
+// 알림 수신 주소 (팀별로 env로 설정)
+const NOTIFY_EMAIL = process.env.SYNC_NOTIFY_EMAIL || '';
 
 interface SyncFailure {
   ticketKey: string;
@@ -83,17 +84,22 @@ export async function sendSyncReportEmail({
   ];
 
   if (failureSections.length > 0) {
-    body.push('', '실패 상세:', ...failureSections, '', 'FE1 Tool에서 수동 동기화를 시도하거나, 해당 담당자에게 문의해 주세요.');
+    body.push('', '실패 상세:', ...failureSections, '', '동기화 툴에서 수동 동기화를 시도하거나, 해당 담당자에게 문의해 주세요.');
   }
 
   const subjectStatus = totalFailed > 0
     ? `성공 ${totalSuccess}건, 실패 ${totalFailed}건`
     : `전체 성공 (${totalSuccess}건)`;
 
+  if (!NOTIFY_EMAIL) {
+    console.warn('[이메일] SYNC_NOTIFY_EMAIL 미설정 - 발송 스킵');
+    return;
+  }
+
   const { error } = await getResend().emails.send({
-    from: 'FE1 Tool <onboarding@resend.dev>',
+    from: 'Jira Sync <onboarding@resend.dev>',
     to: NOTIFY_EMAIL,
-    subject: `[FE1 Tool] Daily Sync (${syncDate}) — ${subjectStatus}`,
+    subject: `[Jira Sync] Daily Sync (${syncDate}) — ${subjectStatus}`,
     text: body.join('\n'),
   });
 
@@ -101,34 +107,5 @@ export async function sendSyncReportEmail({
     console.error(`[이메일] 발송 실패:`, error);
   } else {
     console.log(`[이메일] ${NOTIFY_EMAIL}에 Daily Sync 결과 발송 완료`);
-  }
-}
-
-/**
- * Sprint Closing 결과 이메일 발송 (HTML)
- * 티켓명 옆에 ↗ 인라인 링크 포함
- * to 생략 시 NOTIFY_EMAIL(fedev1@ignite.co.kr)로 발송
- */
-export async function sendSprintCloseEmail(
-  html: string,
-  fromSprint: string,
-  toSprint: string,
-  { to = NOTIFY_EMAIL, isDryRun = false }: { to?: string; isDryRun?: boolean } = {}
-): Promise<void> {
-  const fromNum = fromSprint.replace('FEHG ', '');
-  const toNum = toSprint.replace('FEHG ', '');
-  const prefix = isDryRun ? '[TEST] ' : '';
-
-  const { error } = await getResend().emails.send({
-    from: 'FE1 Tool <onboarding@resend.dev>',
-    to,
-    subject: `${prefix}[FE1 Tool] FEHG 스프린트 마감 · ${fromNum} → ${toNum}`,
-    html,
-  });
-
-  if (error) {
-    console.error(`[이메일] 발송 실패 (${to}):`, error);
-  } else {
-    console.log(`[이메일] ${to}에 Sprint Closing 결과 발송 완료`);
   }
 }

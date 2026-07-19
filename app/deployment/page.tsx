@@ -27,7 +27,7 @@ import {
   Rocket,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { JIRA_USER_LIST } from '@/lib/constants/jira';
+import { useCurrentUser } from '@/contexts/user-context';
 
 type TabType = 'document' | 'tagging';
 type DeploymentType = 'release' | 'adhoc' | 'hotfix';
@@ -56,8 +56,33 @@ const getCurrentMonth = () => {
 };
 
 export default function DeploymentPage() {
+  const { currentUser } = useCurrentUser();
+
   // 탭 상태
   const [activeTab, setActiveTab] = useState<TabType>('document');
+
+  // 팀 사용자 이름 목록 (DB 조회 — 담당자 드롭다운용)
+  const [teamUserNames, setTeamUserNames] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!currentUser?.teamId) return;
+
+    // 사용자 목록 조회 (API route 경유 — users 테이블은 anon RLS 차단됨)
+    fetch('/api/users')
+      .then((r) => r.json())
+      .then((res: { success: boolean; data?: Array<{ name: string; teamId: string }> }) => {
+        if (res.success && res.data) {
+          setTeamUserNames(
+            res.data
+              .filter((u) => u.teamId === currentUser.teamId)
+              .map((u) => u.name)
+          );
+        }
+      })
+      .catch(() => {
+        // 조회 실패 시 드롭다운 비움 (선택 불가)
+      });
+  }, [currentUser?.teamId]);
 
   // === 탭1: 배포대장 문서 생성 ===
   const [docProject, setDocProject] = useState<ProjectKey>('groupware');
@@ -744,7 +769,7 @@ export default function DeploymentPage() {
                 적용합니다
               </CardDescription>
               <p className="text-xs text-amber-600 mt-1">
-                현재는 FEHG 티켓만 지원합니다
+                현재는 팀의 기준 프로젝트(예: BE3) 티켓만 지원합니다
               </p>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -795,9 +820,9 @@ export default function DeploymentPage() {
                     <SelectValue placeholder="담당자를 선택하세요" />
                   </SelectTrigger>
                   <SelectContent>
-                    {JIRA_USER_LIST.map((user) => (
-                      <SelectItem key={user.hmgAccountId} value={user.name}>
-                        {user.name}
+                    {teamUserNames.map((name) => (
+                      <SelectItem key={name} value={name}>
+                        {name}
                       </SelectItem>
                     ))}
                   </SelectContent>

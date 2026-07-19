@@ -79,7 +79,7 @@ export default function Home() {
 
 
   const selectedUser = currentUser?.name ?? '';
-  const sourceProject = currentUser?.sourceProject || 'FEHG';
+  const sourceProject = currentUser?.sourceProject || '';
   const [syncType, setSyncType] = useState<string>('전체'); // 기본값: 전체
   const [epicOrTicketId, setEpicOrTicketId] = useState<string>('');
   const [isSyncing, setIsSyncing] = useState(false);
@@ -106,6 +106,8 @@ export default function Home() {
   }
   const [teamSyncTargets, setTeamSyncTargets] = useState<TeamSyncTarget[]>([]);
   const [isLoadingTargets, setIsLoadingTargets] = useState(true);
+  // 프로젝트 이름 → Jira 인스턴스('ignite' | 'hmg') 맵 (결과 링크 엔드포인트 판별용)
+  const [projectInstanceMap, setProjectInstanceMap] = useState<Record<string, string>>({});
 
   // 에픽 목록 (에픽 지정 모드용)
   const [epicList, setEpicList] = useState<JiraIssue[]>([]);
@@ -146,8 +148,13 @@ export default function Home() {
       // 프로젝트 이름 맵
       const { data: projects } = await db
         .from('projects')
-        .select('id, name');
+        .select('id, name, jira_instance');
       const projectMap = new Map(projects?.map((p) => [p.id, p.name]) || []);
+
+      // 프로젝트 이름 → 인스턴스 맵 (결과 링크 엔드포인트 판별용)
+      setProjectInstanceMap(
+        Object.fromEntries(projects?.map((p) => [p.name, p.jira_instance]) || [])
+      );
 
       // 팀 대상 프로젝트 + sync_profile 조회
       const { data: targets } = await db
@@ -191,12 +198,12 @@ export default function Home() {
 
   // 에픽 목록 로드 (에픽 지정 선택 시)
   useEffect(() => {
-    if (syncType !== '에픽 지정' || epicList.length > 0) return;
+    if (syncType !== '에픽 지정' || epicList.length > 0 || !sourceProject) return;
 
     const loadEpics = async () => {
       setIsLoadingEpics(true);
       try {
-        const result = await jira.ignite.getFEHGIncompleteEpics(sourceProject);
+        const result = await jira.ignite.getIncompleteEpicsByProject(sourceProject);
         if (result.success && result.data) {
           setEpicList(result.data.issues);
         }
@@ -274,6 +281,7 @@ export default function Home() {
 
   const isTicketSyncReady =
     !!currentUser &&
+    !!sourceProject &&
     (!isSpecificMode || epicOrTicketId.trim() !== '') &&
     !isLoadingTargets;
 
@@ -286,6 +294,12 @@ export default function Home() {
     // 사용자 선택 검증
     if (!currentUser) {
       toast.error('사용자가 선택되지 않았습니다. 홈에서 사용자를 선택해주세요.');
+      return;
+    }
+
+    // 소스 프로젝트 검증
+    if (!sourceProject) {
+      toast.error('소스 프로젝트가 설정되지 않았습니다. 팀의 기준 프로젝트를 먼저 설정해주세요.');
       return;
     }
 
@@ -453,9 +467,14 @@ export default function Home() {
     }
   };
 
-  // 에픽 동기화 핸들러 — FEHG의 [GW]/[HB] 에픽들을 AUTOWAY/HMGBOARD로
+  // 에픽 동기화 핸들러 — 동기화 프로필의 허용 에픽을 HMG 타겟 프로젝트에
   // 매칭 또는 생성하고 상태를 동기화 (자식 티켓 sync와 독립)
   const handleEpicSync = async () => {
+    if (!sourceProject) {
+      toast.error('소스 프로젝트가 설정되지 않았습니다. 팀의 기준 프로젝트를 먼저 설정해주세요.');
+      return;
+    }
+
     if (epicSyncMode === 'single' && !epicSyncId) {
       toast.error('에픽 번호를 입력해주세요.');
       return;
@@ -465,22 +484,15 @@ export default function Home() {
     setIsEpicSyncing(true);
 
     try {
-      const sourceProj = currentUser?.sourceProject || 'FEHG';
       const epicKey =
-        epicSyncMode === 'single' ? `${sourceProj}-${epicSyncId}` : undefined;
+        epicSyncMode === 'single' ? `${sourceProject}-${epicSyncId}` : undefined;
 
       const logger = new SyncLogger((log) => {
         setSyncLogs((prev) => [...prev, log]);
       });
 
       const modeLabel =
-        epicSyncMode === 'all'
-          ? '전체 (AUTOWAY + HMGBOARD)'
-          : epicSyncMode === 'autoway'
-            ? 'AUTOWAY'
-            : epicSyncMode === 'hmgboard'
-              ? 'HMGBOARD'
-              : `단일 에픽 (${epicKey})`;
+        epicSyncMode === 'all' ? '전체' : `단일 에픽 (${epicKey})`;
 
       toast.success(`에픽 동기화 시작 — ${modeLabel}`);
 
@@ -488,7 +500,7 @@ export default function Home() {
         {
           mode: epicSyncMode,
           epicKey,
-          sourceProjectKey: sourceProj,
+          sourceProjectKey: sourceProject,
         },
         logger
       );
@@ -928,14 +940,12 @@ export default function Home() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">전체</SelectItem>
-                        <SelectItem value="autoway">AUTOWAY</SelectItem>
-                        <SelectItem value="hmgboard">HMGBOARD</SelectItem>
                         <SelectItem value="single">에픽 번호 입력</SelectItem>
                       </SelectContent>
                     </Select>
                     <Button
                       onClick={handleEpicSync}
-                      disabled={isEpicSyncing || isSyncing}
+                      disabled={isEpicSyncing || isSyncing || !sourceProject}
                       className="min-w-[100px]"
                     >
                       <RefreshCw
@@ -961,14 +971,14 @@ export default function Home() {
                         maxLength={10}
                       />
                       <p className="text-xs text-muted-foreground">
-                        [GW]/[HB] prefix로 대상 자동 결정 • {sourceProject}-
+                        동기화 프로필의 허용 에픽 설정으로 대상 결정 • {sourceProject}-
                         {epicSyncId || 'XXX'}
                       </p>
                     </div>
                   )}
 
                   <p className="text-xs text-muted-foreground">
-                    FEHG의 [GW]/[HB] 에픽을 AUTOWAY/HMGBOARD로 매칭/생성하고 상태를 동기화합니다.
+                    동기화 프로필의 허용 에픽을 HMG 타겟 프로젝트에 매칭/생성하고 상태를 동기화합니다.
                   </p>
                 </div>
 
@@ -1296,12 +1306,12 @@ export default function Home() {
                             {result.success ? '✓' : '✗'}
                           </span>
                           <a
-                            href={`${JIRA_ENDPOINTS.IGNITE}/browse/${result.fehgKey}`}
+                            href={`${JIRA_ENDPOINTS.IGNITE}/browse/${result.sourceKey}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-blue-600 hover:underline inline-flex items-center gap-1"
                           >
-                            {result.fehgKey}
+                            {result.sourceKey}
                             <ExternalLink className="h-3 w-3" />
                           </a>
                           <span className="text-muted-foreground">→</span>
@@ -1309,8 +1319,7 @@ export default function Home() {
                             <>
                               <a
                                 href={`${
-                                  result.targetProject === 'AUTOWAY' ||
-                                  result.targetProject === 'HMGBOARD'
+                                  projectInstanceMap[result.targetProject] === 'hmg'
                                     ? JIRA_ENDPOINTS.HMG
                                     : JIRA_ENDPOINTS.IGNITE
                                 }/browse/${result.targetKey}`}

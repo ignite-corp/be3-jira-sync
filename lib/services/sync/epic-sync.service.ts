@@ -1,30 +1,36 @@
 // 에픽 전용 동기화 서비스
-// - 자식 티켓 sync와 독립적으로, FEHG의 [GW]/[HB] 에픽들을
-//   AUTOWAY/HMGBOARD에 매칭/생성 + 상태 동기화 수행
-// - 모드: all | autoway | hmgboard | single (에픽 키 직접 지정)
+// - 자식 티켓 sync와 독립적으로, DB sync_profile의 허용 에픽들을
+//   HMG 타겟 프로젝트에 매칭/생성 + 상태 동기화 수행
+// - 모드: all(모든 타겟) | 특정 타겟 프로젝트 키 | single(에픽 키 직접 지정)
 
 import { JiraIssue } from '@/lib/types/jira';
 import { dbServer } from '@/lib/db';
 import { jira } from '@/lib/services/jira';
 import { SyncLogger } from './logger';
 import { ensureTargetEpic, clearEpicCache } from './epic-resolver';
-import { clearDbMappingCache } from './db-field-mapper';
+import {
+  clearDbMappingCache,
+  getSyncProfileInfo,
+  getAllowedEpicsFromDb,
+  SyncProfileInfo,
+} from './db-field-mapper';
 import { clearTransitionCache } from './transition-helper';
 
-export type EpicSyncMode = 'all' | 'autoway' | 'hmgboard' | 'single';
+// 'all' | 'single' | 특정 타겟 프로젝트 키 (예: 'GIDPDVO')
+export type EpicSyncMode = 'all' | 'single' | (string & {});
 
 export interface EpicSyncOptions {
   mode: EpicSyncMode;
-  /** 'single' 모드일 때 필수 (예: "FEHG-3340") */
+  /** 'single' 모드일 때 필수 (예: "BE3-2") */
   epicKey?: string;
-  /** 기본값 'FEHG' */
+  /** 소스 프로젝트 키 (예: 'BE3'). 생략 시 DB 프로필에서 유도 */
   sourceProjectKey?: string;
 }
 
 export interface EpicSyncResult {
-  fehgKey: string;
-  fehgSummary: string;
-  targetProject: 'AUTOWAY' | 'HMGBOARD';
+  sourceKey: string;
+  sourceSummary: string;
+  targetProject: string;
   targetKey: string | null;
   success: boolean;
   error?: string;
@@ -37,53 +43,51 @@ export interface EpicSyncSummary {
   results: EpicSyncResult[];
 }
 
-const TARGET_PREFIX: Record<'AUTOWAY' | 'HMGBOARD', '[GW]' | '[HB]'> = {
-  AUTOWAY: '[GW]',
-  HMGBOARD: '[HB]',
-};
-
-async function findHmgProfileId(
-  targetName: 'AUTOWAY' | 'HMGBOARD'
-): Promise<string | null> {
-  const { data: project } = await dbServer
-    .from('projects')
-    .select('id')
-    .eq('name', targetName)
-    .eq('jira_instance', 'hmg')
-    .maybeSingle();
-  if (!project) return null;
-  const { data } = await dbServer
+/**
+ * 소스 프로젝트의 cross-instance(HMG 타겟) 프로필 목록 조회
+ */
+async function loadHmgProfiles(
+  sourceProjectKey: string | undefined,
+  logger: SyncLogger
+): Promise<SyncProfileInfo[]> {
+  const { data: profiles } = await dbServer
     .from('sync_profiles')
-    .select('id')
-    .eq('target_project_id', project.id)
-    .limit(1)
-    .maybeSingle();
-  return data?.id ?? null;
+    .select('id, source:source_project_id(name)');
+  if (!profiles) return [];
+
+  const infos: SyncProfileInfo[] = [];
+  for (const row of profiles) {
+    const source = row.source as unknown as { name: string } | null;
+    if (sourceProjectKey && source?.name !== sourceProjectKey) continue;
+    const info = await getSyncProfileInfo(row.id);
+    if (!info) continue;
+    if (info.targetInstance !== 'hmg') continue;
+    infos.push(info);
+  }
+
+  if (infos.length === 0) {
+    logger.warning(
+      `${sourceProjectKey ?? '(소스 미지정)'}: HMG 타겟 동기화 프로필이 없습니다`
+    );
+  }
+  return infos;
 }
 
-async function fetchFehgEpicsByPrefix(
-  sourceProject: string,
-  prefix: '[GW]' | '[HB]',
+async function fetchEpicIssue(
+  epicKey: string,
   logger: SyncLogger
-): Promise<JiraIssue[]> {
-  logger.info(`${sourceProject} 에픽 조회 중 (${prefix} prefix)...`);
-  // JQL '~' 연산자는 brackets를 처리 못 해서, 전체 에픽 fetch 후 client-side 필터
-  const jql = `${sourceProject ? `project = ${sourceProject} AND ` : ''}issuetype = "에픽"`;
-  const result = await jira.ignite.searchAllIssues(jql, [
+): Promise<JiraIssue | null> {
+  const result = await jira.ignite.getIssue(epicKey, [
     'summary',
     'status',
     'description',
     'duedate',
   ]);
   if (!result.success || !result.data) {
-    logger.error(`FEHG 에픽 조회 실패: ${result.error}`);
-    return [];
+    logger.error(`${epicKey} 조회 실패: ${result.error}`);
+    return null;
   }
-  const filtered = result.data.issues.filter((iss) =>
-    iss.fields.summary?.startsWith(prefix)
-  );
-  logger.info(`${prefix} 에픽 ${filtered.length}개 매치`);
-  return filtered;
+  return result.data;
 }
 
 export async function executeEpicSync(
@@ -95,68 +99,57 @@ export async function executeEpicSync(
   clearDbMappingCache();
   clearTransitionCache();
 
-  const sourceProject = options.sourceProjectKey || 'FEHG';
   const results: EpicSyncResult[] = [];
 
-  // 프로필 ID 미리 조회 (runtime BFS transition을 위해 필요)
-  const [autowayProfileId, hmgboardProfileId] = await Promise.all([
-    findHmgProfileId('AUTOWAY'),
-    findHmgProfileId('HMGBOARD'),
-  ]);
+  // HMG 타겟 프로필 로드
+  let profiles = await loadHmgProfiles(options.sourceProjectKey, logger);
+  if (options.mode !== 'all' && options.mode !== 'single') {
+    // 특정 타겟 프로젝트 키 모드
+    profiles = profiles.filter((p) => p.targetProjectKey === options.mode);
+    if (profiles.length === 0) {
+      logger.warning(`${options.mode}: 해당 타겟의 동기화 프로필 없음`);
+      return emptySummary();
+    }
+  }
+  if (profiles.length === 0) return emptySummary();
 
-  // 처리할 (FEHG 에픽, 대상 프로젝트) 페어 결정
-  const pairs: Array<{
-    epic: JiraIssue;
-    target: 'AUTOWAY' | 'HMGBOARD';
-    profileId: string | null;
-  }> = [];
+  // 처리할 (소스 에픽, 프로필) 페어 결정
+  const pairs: Array<{ epic: JiraIssue; profile: SyncProfileInfo }> = [];
 
   if (options.mode === 'single') {
     if (!options.epicKey) {
       logger.error('단일 에픽 모드: epicKey 필요');
       return emptySummary();
     }
-    const result = await jira.ignite.getIssue(options.epicKey, [
-      'summary',
-      'status',
-      'description',
-      'duedate',
-    ]);
-    if (!result.success || !result.data) {
-      logger.error(`${options.epicKey} 조회 실패: ${result.error}`);
-      return emptySummary();
+    const epic = await fetchEpicIssue(options.epicKey, logger);
+    if (!epic) return emptySummary();
+
+    for (const profile of profiles) {
+      const allowedEpics = await getAllowedEpicsFromDb(profile.id);
+      if (allowedEpics.length === 0 || allowedEpics.includes(epic.key)) {
+        pairs.push({ epic, profile });
+      }
     }
-    const epic = result.data;
-    const summary = epic.fields.summary || '';
-    if (summary.startsWith(TARGET_PREFIX.AUTOWAY)) {
-      pairs.push({ epic, target: 'AUTOWAY', profileId: autowayProfileId });
-    } else if (summary.startsWith(TARGET_PREFIX.HMGBOARD)) {
-      pairs.push({ epic, target: 'HMGBOARD', profileId: hmgboardProfileId });
-    } else {
+    if (pairs.length === 0) {
       logger.warning(
-        `${options.epicKey}: [GW]/[HB] prefix 없음 - 대상 결정 불가 (summary: "${summary}")`
+        `${options.epicKey}: 이 에픽을 허용하는 동기화 프로필 없음 (sync_profile_allowed_epics 확인)`
       );
       return emptySummary();
     }
   } else {
-    if (options.mode === 'all' || options.mode === 'autoway') {
-      const gwEpics = await fetchFehgEpicsByPrefix(
-        sourceProject,
-        '[GW]',
-        logger
-      );
-      for (const epic of gwEpics) {
-        pairs.push({ epic, target: 'AUTOWAY', profileId: autowayProfileId });
+    // all 또는 특정 타겟: 각 프로필의 허용 에픽 목록 기반
+    for (const profile of profiles) {
+      const allowedEpics = await getAllowedEpicsFromDb(profile.id);
+      if (allowedEpics.length === 0) {
+        logger.warning(
+          `${profile.name}: 허용 에픽 미등록 - 에픽 동기화 스킵 (sync_profile_allowed_epics에 등록 필요)`
+        );
+        continue;
       }
-    }
-    if (options.mode === 'all' || options.mode === 'hmgboard') {
-      const hbEpics = await fetchFehgEpicsByPrefix(
-        sourceProject,
-        '[HB]',
-        logger
-      );
-      for (const epic of hbEpics) {
-        pairs.push({ epic, target: 'HMGBOARD', profileId: hmgboardProfileId });
+      logger.info(`${profile.name}: 허용 에픽 ${allowedEpics.length}개`);
+      for (const epicKey of allowedEpics) {
+        const epic = await fetchEpicIssue(epicKey, logger);
+        if (epic) pairs.push({ epic, profile });
       }
     }
   }
@@ -169,18 +162,20 @@ export async function executeEpicSync(
   logger.info(`총 ${pairs.length}개 에픽 동기화 시작`);
 
   // 순차 처리 — 동시성은 ensureTargetEpic 내부 Promise dedup으로 충분히 처리됨
-  for (const { epic, target, profileId } of pairs) {
+  for (const { epic, profile } of pairs) {
     try {
       const targetKey = await ensureTargetEpic(
         { key: epic.key, summary: epic.fields.summary },
-        target,
+        profile.targetProjectKey,
         logger,
-        profileId ?? undefined
+        profile.id,
+        profile.useEpicPrefix,
+        profile.linkField
       );
       results.push({
-        fehgKey: epic.key,
-        fehgSummary: epic.fields.summary,
-        targetProject: target,
+        sourceKey: epic.key,
+        sourceSummary: epic.fields.summary,
+        targetProject: profile.targetProjectKey,
         targetKey,
         success: !!targetKey,
       });
@@ -188,9 +183,9 @@ export async function executeEpicSync(
       const msg = e instanceof Error ? e.message : String(e);
       logger.error(`${epic.key}: 에픽 동기화 실패 - ${msg}`);
       results.push({
-        fehgKey: epic.key,
-        fehgSummary: epic.fields.summary,
-        targetProject: target,
+        sourceKey: epic.key,
+        sourceSummary: epic.fields.summary,
+        targetProject: profile.targetProjectKey,
         targetKey: null,
         success: false,
         error: msg,

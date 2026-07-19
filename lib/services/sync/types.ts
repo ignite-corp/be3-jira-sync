@@ -1,15 +1,8 @@
 // 동기화 관련 타입 정의
 
-// 동기화 대상 프로젝트 (HB는 HMGBOARD로 이관됨)
-// KQ/HDD/AUTOWAY/HMGBOARD는 고정 분류 규칙(issuelinks/[GW]/[HB] 에픽 접두사)을 갖고,
-// 그 외 이름은 DB sync_profile 기반 일반 분류를 탄다
-export type SyncTargetProject = 'KQ' | 'HDD' | 'AUTOWAY' | 'HMGBOARD' | (string & {});
-
-// HMG 인스턴스 동기화 대상 (코드 분기에서 사용)
-export type HmgTargetProject = 'AUTOWAY' | 'HMGBOARD';
-
-// Ignite 인스턴스 동기화 대상
-export type IgniteTargetProject = 'KQ' | 'HDD';
+// 동기화 대상 프로젝트 키 (DB projects.name)
+// 분류/매핑 규칙은 전부 DB sync_profile 기반
+export type SyncTargetProject = string;
 
 // 동기화 모드
 export type SyncMode =
@@ -20,7 +13,7 @@ export type SyncMode =
 
 // 동기화 결과
 export interface SyncResult {
-  fehgKey: string;
+  sourceKey: string;
   targetKey: string;
   targetProject: SyncTargetProject;
   success: boolean;
@@ -63,11 +56,11 @@ export interface SyncOptions {
   assigneeAccountId?: string; // 담당자 Ignite accountId (에픽 단위 동기화 시 생략 가능)
   assigneeName?: string; // 담당자 이름 (로깅용)
   teamUsers?: { name: string; igniteAccountId: string; hmgAccountId: string; hmgUserId: string }[]; // 같은 팀 사용자 목록 (계정 매핑용)
-  targetProjects?: SyncTargetProject[]; // 대상 프로젝트 (없으면 전체)
+  targetProjects?: SyncTargetProject[]; // 대상 프로젝트 (없으면 소스 프로젝트의 모든 DB 프로필 대상)
   epicId?: string; // 에픽 지정 모드
   ticketId?: string; // 티켓 지정 모드
   syncAllInEpic?: boolean; // 에픽 단위 동기화 (담당자 무관하게 에픽 하위 전체 동기화)
-  sourceProjectKey?: string; // 소스 프로젝트 키 (예: 'FEHG', 'BEDEV1')
+  sourceProjectKey?: string; // 소스 프로젝트 키 (예: 'BE3')
   syncProfileId?: string; // DB 기반 동기화 시 사용할 프로필 ID
   chunkSize?: number; // 청크 크기 (기본: 15)
 }

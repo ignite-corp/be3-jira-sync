@@ -25,7 +25,7 @@ function isAllowedIp(ip: string): boolean {
   return ALLOWED_CIDRS.some((cidr) => isIpInCidr(ip, cidr));
 }
 
-export function proxy(request: NextRequest) {
+export function middleware(request: NextRequest) {
   // 개발 환경에서는 IP 제한 미적용
   if (process.env.NODE_ENV === 'development') {
     return NextResponse.next();
@@ -41,12 +41,17 @@ export function proxy(request: NextRequest) {
     request.headers.get('x-real-ip') ||
     '';
 
-  // API 호출은 IP 제한 대신 별도 인증으로 보호
-  if (request.nextUrl.pathname.startsWith('/api/')) {
-    return NextResponse.next();
-  }
+  const isApi = request.nextUrl.pathname.startsWith('/api/');
 
   if (!ip || !isAllowedIp(ip)) {
+    // API 경로는 JSON으로 차단 (사용자 토큰 등 민감 데이터가 이 경로로 노출됨)
+    if (isApi) {
+      return NextResponse.json(
+        { success: false, error: 'VPN 환경에서만 접근할 수 있습니다.', code: 'IP_NOT_ALLOWED' },
+        { status: 403 }
+      );
+    }
+
     const html = `<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -105,7 +110,8 @@ export function proxy(request: NextRequest) {
 export const config = {
   matcher: [
     /*
-     * 정적 파일(_next/static, favicon 등)과 API 배치 경로를 제외한 모든 경로에 적용
+     * 정적 파일(_next/static, favicon 등)을 제외한 모든 경로에 적용.
+     * /api/* 도 반드시 포함 — 사용자 토큰 등 민감 데이터가 API로 노출되므로.
      */
     '/((?!_next/static|_next/image|favicon.ico).*)',
   ],

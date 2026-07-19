@@ -1,16 +1,17 @@
 # Jira 통합 관리 도구
 
-> 원본 레포: https://github.com/Ignite-FEDev1/jira-sync
+> 레포: https://github.com/ignite-corp/be3-jira-sync
 
 Jira 자동화 및 통합 관리 도구입니다.
+DB(sync_profile)에 등록된 소스→타겟 매핑을 기반으로 소스 프로젝트(BE3)의 티켓을 HMG Jira 타겟 프로젝트로 동기화합니다.
 
 ## 🚀 설치 및 실행
 
 ### 1. 프로젝트 클론
 
 ```bash
-git clone https://github.com/Ignite-FEDev1/jira-sync.git
-cd fe1-web
+git clone https://github.com/ignite-corp/be3-jira-sync.git
+cd be3-jira-sync
 ```
 
 ### 2. 의존성 설치
@@ -31,6 +32,15 @@ IGNITE_JIRA_API_TOKEN=your_ignite_api_token
 # HMG Jira 인증 정보 (VPN 필요)
 HMG_JIRA_EMAIL=your-email@hyundai-partners.com
 HMG_JIRA_API_TOKEN=your_hmg_api_token
+
+# DB (Supabase) - 동기화 프로필/필드 매핑 저장소
+NEXT_PUBLIC_DB_URL=
+NEXT_PUBLIC_DB_ANON_KEY=
+DB_SERVICE_ROLE_KEY=
+
+# 동기화 결과 이메일 알림 (선택)
+RESEND_API_KEY=
+SYNC_NOTIFY_EMAIL=notify-target@example.com
 
 # Blackduck
 BLACKDUCK_BASE_URL=
@@ -83,7 +93,7 @@ http://localhost:7591
 ## 📁 프로젝트 구조
 
 ```
-fe1-web/
+be3-jira-sync/
 ├── app/                    # Next.js App Router
 │   ├── api/               # API Routes (Jira 프록시)
 │   ├── create-ticket/     # 티켓 생성 페이지
@@ -112,9 +122,10 @@ fe1-web/
 
 ## 📚 주요 기능
 
-- ✅ FEHG → KQ/HB/HDD/AUTOWAY 자동 동기화
+- ✅ DB 프로필 기반 소스→타겟 동기화 (BE3 → HMG)
+- ✅ 필드/상태 매핑, 허용 에픽을 DB(설정 페이지)에서 관리
 - ✅ 에픽/티켓 지정 모드
 - ✅ 스프린트 자동 매핑
 - ✅ 실시간 로그 및 결과 표시
 - ✅ 신규 생성/업데이트 구분
-- ✅ FEHG 티켓 생성
+- ✅ 소스(BE3) 티켓 생성

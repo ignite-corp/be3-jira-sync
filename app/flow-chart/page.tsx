@@ -54,60 +54,59 @@ export default function FlowChartPage() {
     {
       id: 1,
       title: '1. 전체 동기화 플로우',
-      description: '담당자 선택 → 전체 → 동기화 버튼',
+      description:
+        '담당자 선택 → 전체 → 동기화 버튼 (DB sync_profile 기반, 소스 프로젝트: BE3)',
       diagram: `
 flowchart TD
     Start([사용자: 담당자 선택]) --> SelectType[동기화 타입: 전체 선택]
     SelectType --> ClickBtn[동기화 버튼 클릭]
-    
+
     ClickBtn --> Validate{검증}
     Validate -->|실패| ErrorToast[Toast 에러 표시]
     ErrorToast --> End([종료])
-    
+
     Validate -->|성공| HandleSync[handleSync 실행]
     HandleSync --> CreateOrch[SyncOrchestrator 생성<br/>+ 로그 콜백 설정]
-    
+
     CreateOrch --> Execute[orchestrator.execute]
-    
-    Execute --> InitCache[스프린트 캐시 초기화]
-    InitCache --> DetermineProj[대상 프로젝트 결정<br/>→ KQ, HDD, HB, AUTOWAY]
-    
-    DetermineProj --> PreloadSprint{스프린트 프리로드}
-    
-    PreloadSprint -.병렬.-> LoadKQ[KQ 스프린트 조회]
-    PreloadSprint -.병렬.-> LoadHDD[HDD 스프린트 조회]
-    PreloadSprint -.병렬.-> LoadHB[HB 스프린트 조회]
-    
-    LoadKQ --> SprintDone[프리로드 완료]
-    LoadHDD --> SprintDone
-    LoadHB --> SprintDone
-    
-    SprintDone --> FetchFEHG[FEHG 티켓 조회<br/>JQL: project = FEHG AND assignee = ...]
-    
-    FetchFEHG --> CheckTickets{티켓 존재?}
+
+    Execute --> InitCache[캐시 초기화<br/>스프린트 / DB 매핑 / 전이 / 에픽]
+    InitCache --> ResolveSource[소스 프로젝트 결정<br/>DB sync_profiles 기반]
+    ResolveSource --> LoadProfiles[동기화 프로필 로드<br/>타겟 프로젝트 + 필드 매핑 + 허용 에픽]
+
+    LoadProfiles --> PreloadSprint{스프린트 프리로드<br/>projects.board_id}
+
+    PreloadSprint -.병렬.-> LoadT1[타겟 프로젝트 1<br/>스프린트 조회]
+    PreloadSprint -.병렬.-> LoadT2[타겟 프로젝트 2<br/>스프린트 조회]
+    PreloadSprint -.병렬.-> LoadTN[타겟 프로젝트 N<br/>스프린트 조회]
+
+    LoadT1 --> SprintDone[프리로드 완료]
+    LoadT2 --> SprintDone
+    LoadTN --> SprintDone
+
+    SprintDone --> FetchSource[소스 티켓 조회<br/>JQL: project = BE3 AND assignee = ...<br/>AND due 컷오프 이후]
+
+    FetchSource --> CheckTickets{티켓 존재?}
     CheckTickets -->|없음| Warning[경고 로그 + 종료]
     Warning --> Summary
-    
-    CheckTickets -->|있음| Classify[티켓 분류 1회 순회<br/>→ issuelinks 확인<br/>→ customfield_10306 확인]
-    
+
+    CheckTickets -->|있음| Classify[티켓 분류 1회 순회<br/>같은 인스턴스: Blocks 링크 prefix<br/>HMG: link_field 또는 허용 에픽]
+
     Classify --> ClassifyResult{프로젝트별 분류 완료}
-    
-    ClassifyResult --> ProjectSync[프로젝트별 순차 동기화]
-    
-    ProjectSync --> SyncKQ[KQ 동기화<br/>청크 단위 병렬 처리]
-    SyncKQ --> SyncHDD[HDD 동기화<br/>청크 단위 병렬 처리]
-    SyncHDD --> SyncHB[HB 동기화<br/>청크 단위 병렬 처리]
-    SyncHB --> SyncAW[AUTOWAY 동기화<br/>청크 단위 병렬 처리]
-    
-    SyncAW --> AllComplete[모든 프로젝트 완료]
+
+    ClassifyResult --> ProjectSync[타겟 프로젝트별 순차 동기화]
+
+    ProjectSync --> SyncEach[각 타겟 프로젝트<br/>청크 단위 병렬 처리]
+
+    SyncEach --> AllComplete[모든 프로젝트 완료]
     AllComplete --> Summary[결과 요약 생성]
-    
+
     Summary --> CalcStats[통계 계산<br/>• 총 처리<br/>• 성공/실패<br/>• 신규 생성/업데이트]
-    
+
     CalcStats --> UIUpdate[UI 업데이트<br/>• 로그 표시<br/>• 링크 생성<br/>• Toast 알림]
-    
+
     UIUpdate --> End
-    
+
     style Start fill:#3b82f6,color:#fff
     style End fill:#10b981,color:#fff
     style ErrorToast fill:#ef4444,color:#fff
@@ -115,60 +114,49 @@ flowchart TD
     style Execute fill:#8b5cf6,color:#fff
     style PreloadSprint fill:#ec4899,color:#fff
     style ProjectSync fill:#8b5cf6,color:#fff
-    style SyncKQ fill:#ec4899,color:#fff
-    style SyncHDD fill:#ec4899,color:#fff
-    style SyncHB fill:#ec4899,color:#fff
-    style SyncAW fill:#ec4899,color:#fff
+    style SyncEach fill:#ec4899,color:#fff
     style Summary fill:#10b981,color:#fff
 `,
     },
     {
       id: 2,
-      title: '2-1. Ignite 프로젝트 동기화 (KQ/HB/HDD)',
-      description: 'FEHG → KQ/HB/HDD 동기화 상세 플로우',
+      title: '2-1. 같은 인스턴스 동기화',
+      description:
+        '소스 프로젝트(BE3) → 같은 Jira 내 타겟 프로젝트 (Blocks 링크 기반 업데이트)',
       diagram: `
 flowchart TD
-    Start([담당자 선택<br/>예: 박성진])
-    Start --> GetUser[사용자 정보 조회<br/>JIRA_USERS 객체]
-    GetUser --> UserInfo[igniteAccountId 추출<br/>61234...abcd]
-    
-    UserInfo --> SelectType[FEHG to KQ 선택]
-    SelectType --> ClickBtn[동기화 버튼]
-    
+    Start([담당자 선택])
+    Start --> GetUser[사용자 정보 조회<br/>DB users 테이블]
+    GetUser --> UserInfo[ignite_account_id 추출]
+
+    UserInfo --> ClickBtn[동기화 버튼]
+
     ClickBtn --> Execute[orchestrator.execute]
-    Execute --> PreloadSprint[스프린트 캐싱<br/>BOARD_IDS KQ 보드 조회]
-    
+    Execute --> LoadProfile[동기화 프로필 로드<br/>DB sync_profiles]
+
+    LoadProfile --> PreloadSprint[스프린트 캐싱<br/>projects.board_id 보드 조회]
     PreloadSprint --> SprintCache[캐시 저장<br/>Map boardId to SprintInfo]
-    SprintCache --> FetchFEHG[FEHG 티켓 조회]
-    
-    FetchFEHG --> Classify[issuelinks 확인<br/>Blocks 관계 찾기]
-    Classify --> FindLinked[KQ- prefix 티켓 찾기]
-    
-    FindLinked --> SyncKQ[IgniteSyncService.syncTicket]
-    SyncKQ --> MapFields[필드 매핑]
-    
-    MapFields --> Field1[summary 복사]
-    Field1 --> Field2[duedate 복사]
-    Field2 --> Field3[시작일 customfield_10015]
-    Field3 --> Field4[assignee accountId 동일]
-    Field4 --> Field5[timetracking 복사]
-    
-    Field5 --> SprintMap[스프린트 매핑]
-    SprintMap --> ExtractPeriod[FEHG 2511 추출<br/>기간: 2511]
-    ExtractPeriod --> ConvertYear[202511로 변환]
-    ConvertYear --> BuildTarget[KQ 202511 생성]
-    BuildTarget --> FindSprint[캐시에서 스프린트 조회<br/>이름 매칭]
-    FindSprint --> SprintID[스프린트 ID 반환]
-    
-    SprintID --> UpdateFields[jira.ignite.updateIssueFields<br/>PUT /rest/api/3/issue/KQ-XXX]
-    UpdateFields --> StatusSync[상태 동기화<br/>HDD는 스킵]
-    
-    StatusSync --> MapStatus[STATUS_MAPPING.IGNITE<br/>fehgStatusId to transitionId]
-    MapStatus --> Transition[jira.ignite.updateIssueStatus<br/>POST /rest/api/3/issue/KQ-XXX/transitions]
-    
+    SprintCache --> FetchSource[소스 티켓 조회<br/>BE3]
+
+    FetchSource --> Classify[issuelinks 확인<br/>Blocks 관계 + 타겟 키 prefix]
+    Classify --> FindLinked[타겟 프로젝트 티켓 찾기]
+
+    FindLinked --> SyncTicket[IgniteSyncService.syncTicket]
+    SyncTicket --> MapFields[필드 매핑<br/>DB sync_field_mappings]
+
+    MapFields --> Transform[transform_type별 변환<br/>copy / 스프린트 등]
+    Transform --> SprintMap[스프린트 매핑<br/>캐시에서 이름 매칭 후 ID 조회]
+
+    SprintMap --> UpdateFields[jira.ignite.updateIssueFields<br/>PUT /rest/api/3/issue]
+    UpdateFields --> StatusSync[상태 동기화]
+
+    StatusSync --> MapStatus[sync_profile_status_mappings<br/>소스 상태 to 타겟 상태]
+    MapStatus --> BFS[BFS 전이 경로 탐색<br/>sync_profile_workflows + 런타임]
+    BFS --> Transition[jira.ignite.updateIssueStatus<br/>POST transitions]
+
     Transition --> Complete[동기화 완료]
     Complete --> End([종료])
-    
+
     style Start fill:#3b82f6,color:#fff
     style End fill:#10b981,color:#fff
     style Execute fill:#8b5cf6,color:#fff
@@ -181,84 +169,78 @@ flowchart TD
     },
     {
       id: 3,
-      title: '2-2. HMG 프로젝트 동기화 (AUTOWAY)',
-      description: 'FEHG → AUTOWAY 동기화 상세 플로우',
+      title: '2-2. HMG 인스턴스 동기화',
+      description:
+        '소스 프로젝트(BE3) → HMG 타겟 프로젝트 (GIDPDVO 등) 생성/업데이트',
       diagram: `
 flowchart TD
-    Start([담당자 선택<br/>예: 박성진])
-    Start --> GetUser[사용자 정보 조회<br/>JIRA_USERS 객체]
-    GetUser --> UserInfo[igniteAccountId<br/>hmgAccountId 추출]
-    
-    UserInfo --> SelectAW[FEHG to AUTOWAY 선택]
-    SelectAW --> ClickBtn[동기화 버튼]
-    
+    Start([담당자 선택])
+    Start --> GetUser[사용자 정보 조회<br/>DB users 테이블]
+    GetUser --> UserInfo[ignite_account_id<br/>hmg_account_id 추출]
+
+    UserInfo --> ClickBtn[동기화 버튼]
+
     ClickBtn --> Execute[HMGSyncService.syncTicket]
-    Execute --> CheckField[customfield_10306 확인]
-    
-    CheckField --> HasLink{AUTOWAY 링크<br/>존재?}
-    
-    HasLink -->|없음| CreateFlow[신규 생성 플로우]
-    CreateFlow --> MapCreate[필드 매핑]
-    
-    MapCreate --> C1[summary 복사]
-    C1 --> C2[description ADF 생성<br/>FEHG 링크 포함]
-    C2 --> C3[duedate 3개 필드<br/>duedate, End Date, Gantt End]
-    C3 --> C4[시작일 3개 필드<br/>Start Date x2, Gantt Start]
-    C4 --> C5[assignee 매핑<br/>ignite to hmg accountId]
-    C5 --> C6[reporter 매핑<br/>ignite to hmg accountId]
-    
-    C6 --> CreateTicket[jira.hmg.createIssue<br/>POST /rest/api/3/issue]
-    CreateTicket --> GetKey[AUTOWAY-XXX 생성]
-    GetKey --> SaveLink[FEHG customfield_10306 저장<br/>AUTOWAY URL]
-    SaveLink --> CreateStatus[상태 동기화]
-    
+    Execute --> CheckField[프로필 link_field 확인]
+
+    CheckField --> HasLink{타겟 티켓 링크<br/>존재?}
+
+    HasLink -->|없음| EnsureEpic[부모 에픽 확보<br/>타겟에서 소스키 prefix<br/>summary 매칭]
+    EnsureEpic --> EpicFound{동일 summary<br/>에픽 존재?}
+    EpicFound -->|없음| CreateEpic[타겟 에픽 신규 생성]
+    EpicFound -->|있음| EpicStatus[에픽 상태 동기화<br/>완료 상태면 스킵]
+    CreateEpic --> EpicStatus
+
+    EpicStatus --> MapCreate[필드 매핑<br/>DB sync_field_mappings]
+    MapCreate --> CreateTicket[jira.hmg.createIssue<br/>POST /rest/api/3/issue]
+    CreateTicket --> SaveLink[소스 티켓 link_field에<br/>타겟 티켓 URL 저장]
+    SaveLink --> StatusSync[상태 동기화]
+
     HasLink -->|있음| UpdateFlow[기존 티켓 업데이트 플로우]
-    UpdateFlow --> ExtractKey[AUTOWAY-XXX 추출<br/>정규식 매칭]
+    UpdateFlow --> ExtractKey[타겟 키 추출<br/>정규식 매칭]
     ExtractKey --> MapUpdate[필드 매핑<br/>생성과 동일]
-    
-    MapUpdate --> UpdateTicket[jira.hmg.updateIssue<br/>PUT /rest/api/3/issue/AUTOWAY-XXX]
-    UpdateTicket --> UpdateStatus[상태 동기화]
-    
-    CreateStatus --> MapHMG[STATUS_MAPPING.HMG<br/>fehgStatusId to transitionId]
-    UpdateStatus --> MapHMG
-    
-    MapHMG --> TransitionAW[jira.hmg.updateIssueStatus<br/>POST transitions]
-    TransitionAW --> Complete[동기화 완료]
+
+    MapUpdate --> UpdateTicket[jira.hmg.updateIssue<br/>PUT /rest/api/3/issue]
+    UpdateTicket --> StatusSync
+
+    StatusSync --> MapStatus[sync_profile_status_mappings<br/>소스 상태 to 타겟 상태]
+    MapStatus --> BFS[런타임 BFS transition<br/>multi-step 자동 처리]
+
+    BFS --> Complete[동기화 완료]
     Complete --> End([종료])
-    
+
     style Start fill:#3b82f6,color:#fff
     style End fill:#10b981,color:#fff
     style CheckField fill:#8b5cf6,color:#fff
-    style CreateFlow fill:#ec4899,color:#fff
+    style EnsureEpic fill:#ec4899,color:#fff
     style UpdateFlow fill:#06b6d4,color:#fff
     style CreateTicket fill:#10b981,color:#fff
     style SaveLink fill:#f59e0b,color:#fff
-    style MapHMG fill:#f59e0b,color:#fff
-    style TransitionAW fill:#10b981,color:#fff
+    style MapStatus fill:#f59e0b,color:#fff
+    style BFS fill:#10b981,color:#fff
 `,
     },
     {
       id: 4,
       title: '3. 에픽 지정 동기화',
-      description: '담당자 선택 → 에픽 지정 → FEHG-123 입력 → 동기화 버튼',
+      description: '담당자 선택 → 에픽 지정 → BE3-123 입력 → 동기화 버튼',
       diagram: `
 flowchart TD
     Start([담당자 선택])
     Start --> InputEpic[에픽 번호 입력]
     InputEpic --> ClickBtn[동기화 버튼]
-    
+
     ClickBtn --> HandleSync[handleSync]
     HandleSync --> Execute[execute]
-    Execute --> DetermineEpic[에픽 대상 결정]
-    
-    DetermineEpic --> FetchEpic[에픽 조회]
-    FetchEpic --> FetchTickets[하위 티켓 조회]
+    Execute --> FilterProfiles[허용 에픽으로 대상 프로필 필터<br/>sync_profile_allowed_epics]
+
+    FilterProfiles --> FetchTickets[하위 티켓 조회<br/>JQL: parent = 에픽 키]
     FetchTickets --> Classify[티켓 분류]
-    
+
     Classify --> SyncLoop[프로젝트별 동기화]
     SyncLoop --> Summary[결과 요약]
     Summary --> End([종료])
-    
+
     style Start fill:#3b82f6,color:#fff
     style End fill:#10b981,color:#fff
     style Execute fill:#8b5cf6,color:#fff
@@ -269,24 +251,24 @@ flowchart TD
     {
       id: 5,
       title: '4. 티켓 지정 동기화',
-      description: '담당자 선택 → 티켓 지정 → FEHG-456 입력 → 동기화 버튼',
+      description: '담당자 선택 → 티켓 지정 → BE3-456 입력 → 동기화 버튼',
       diagram: `
 flowchart TD
     Start([담당자 선택])
     Start --> InputTicket[티켓 번호 입력]
     InputTicket --> ClickBtn[동기화 버튼]
-    
+
     ClickBtn --> HandleSync[handleSync]
     HandleSync --> Execute[execute]
     Execute --> DetermineTicket[티켓 대상 결정]
-    
+
     DetermineTicket --> FetchTicket[티켓 조회]
-    FetchTicket --> CheckLinks[issuelinks 확인]
+    FetchTicket --> CheckLinks[분류 확인<br/>Blocks 링크 / link_field / 허용 에픽]
     CheckLinks --> SyncSingle[동기화 실행]
-    
+
     SyncSingle --> Summary[결과 요약]
     Summary --> End([종료])
-    
+
     style Start fill:#3b82f6,color:#fff
     style End fill:#10b981,color:#fff
     style Execute fill:#8b5cf6,color:#fff
@@ -340,7 +322,7 @@ flowchart TD
           <div>
             <h1 className="text-lg font-bold">티켓 동기화 Flow Chart</h1>
             <p className="text-sm text-muted-foreground">
-              자동화 작업의 전체 흐름을 시각화합니다
+              자동화 작업의 전체 흐름을 시각화합니다 (DB sync_profile 기반)
             </p>
           </div>
           <Link href="/create-epic">
@@ -462,8 +444,9 @@ flowchart TD
                       </h4>
                       <ul className="text-sm text-blue-800 space-y-1">
                         <li>
-                          • <strong>스프린트 프리로드</strong>: KQ, HDD, HB의
-                          스프린트 정보를 동시에 조회
+                          • <strong>스프린트 프리로드</strong>: 모든 타겟
+                          프로젝트의 스프린트 정보를 동시에 조회
+                          (projects.board_id 기준)
                         </li>
                         <li>
                           • <strong>청크 내부 병렬 처리</strong>: 각
@@ -483,6 +466,10 @@ flowchart TD
                           종료
                         </li>
                         <li>
+                          • <strong>프로필 없음</strong>: DB에 sync_profile이
+                          없으면 경고 후 종료 (설정 &gt; 필드 매핑에서 등록)
+                        </li>
+                        <li>
                           • <strong>Promise.allSettled</strong>: 일부 티켓
                           실패해도 나머지 계속 진행
                         </li>
@@ -499,12 +486,12 @@ flowchart TD
                       </h4>
                       <ul className="text-sm text-green-800 space-y-1">
                         <li>
-                          • <strong>스프린트 캐싱</strong>: 동기화 세션 동안
-                          스프린트 목록 재사용
+                          • <strong>세션 캐싱</strong>: 스프린트/DB 매핑/전이
+                          경로/에픽 목록을 동기화 세션 동안 재사용
                         </li>
                         <li>
                           • <strong>1회 순회 분류</strong>: 티켓을 한 번만
-                          순회하여 프로젝트별 분류
+                          순회하여 타겟 프로젝트별 분류
                         </li>
                         <li>
                           • <strong>청킹 전략</strong>: API 부하 방지를 위해
@@ -523,10 +510,10 @@ flowchart TD
                       </h4>
                       <ul className="text-sm text-yellow-800 space-y-1">
                         <li>
-                          • UI에서 선택한 담당자 이름 → JIRA_USERS 객체로 조회
+                          • UI에서 선택한 담당자 → DB users 테이블에서 조회
                         </li>
                         <li>
-                          • igniteAccountId 추출 (Ignite 프로젝트는 동일 ID
+                          • ignite_account_id 추출 (같은 인스턴스는 동일 ID
                           사용)
                         </li>
                         <li>• assignee 필드에 accountId 객체로 전달</li>
@@ -541,10 +528,11 @@ flowchart TD
                         <li>
                           • <strong>캐싱</strong>: 동기화 시작 시
                           Map&lt;boardId, SprintInfo[]&gt; 생성
+                          (projects.board_id 기준)
                         </li>
                         <li>
-                          • <strong>매핑</strong>: &quot;FEHG 2511&quot; →
-                          &quot;KQ 202511&quot; 이름 변환 후 ID 조회
+                          • <strong>매핑</strong>: 소스 스프린트 이름을 타겟
+                          규칙으로 변환 후 캐시에서 ID 조회
                         </li>
                         <li>
                           • <strong>성능</strong>: 한 번만 조회하고 재사용
@@ -557,20 +545,33 @@ flowchart TD
                         🔵 업데이트 필드
                       </h4>
                       <ul className="text-sm text-blue-800 space-y-1">
-                        <li>• summary, duedate, customfield_10015 (시작일)</li>
-                        <li>• assignee, timetracking</li>
-                        <li>• customfield_10020 (스프린트)</li>
+                        <li>
+                          • DB sync_field_mappings에 등록된 필드만 동기화
+                        </li>
+                        <li>
+                          • source_field → target_field 매핑 +
+                          transform_type/transform_config 변환 규칙 적용
+                        </li>
+                        <li>
+                          • 설정 &gt; 필드 매핑 페이지에서 코드 수정 없이 관리
+                        </li>
                       </ul>
                     </div>
 
                     <div className="p-4 bg-green-50 border-l-4 border-green-500 rounded">
                       <h4 className="font-semibold text-green-900 mb-2">
-                        🟢 Transition API
+                        🟢 상태 동기화 (Transition)
                       </h4>
                       <ul className="text-sm text-green-800 space-y-1">
-                        <li>• STATUS_MAPPING.IGNITE로 transitionId 조회</li>
-                        <li>• POST /rest/api/3/issue/KQ-XXX/transitions</li>
-                        <li>• HDD 프로젝트는 권한 문제로 상태 동기화 스킵</li>
+                        <li>
+                          • sync_profile_status_mappings로 소스 상태 → 타겟
+                          목표 상태 결정
+                        </li>
+                        <li>
+                          • sync_profile_workflows + 런타임 BFS로 최단 전이
+                          경로 계산 (multi-step 자동 처리)
+                        </li>
+                        <li>• POST /rest/api/3/issue/{'{key}'}/transitions</li>
                       </ul>
                     </div>
                   </>
@@ -580,64 +581,71 @@ flowchart TD
                   <>
                     <div className="p-4 bg-yellow-50 border-l-4 border-yellow-500 rounded">
                       <h4 className="font-semibold text-yellow-900 mb-2">
-                        🟡 담당자 매핑 (Cross-Platform)
+                        🟡 담당자 매핑 (Cross-Instance)
                       </h4>
                       <ul className="text-sm text-yellow-800 space-y-1">
                         <li>
-                          • igniteAccountId (FEHG 조회용) → hmgAccountId
-                          (AUTOWAY 설정용)
+                          • ignite_account_id (소스 조회용) → hmg_account_id
+                          (타겟 설정용)
                         </li>
-                        <li>• JIRA_USERS 객체에서 두 ID 모두 보관</li>
-                        <li>• assignee와 reporter 모두 hmgAccountId로 설정</li>
+                        <li>• DB users 테이블에서 두 ID 모두 보관</li>
+                        <li>
+                          • assignee와 reporter 모두 hmg_account_id로 설정
+                        </li>
                       </ul>
                     </div>
 
                     <div className="p-4 bg-purple-50 border-l-4 border-purple-500 rounded">
                       <h4 className="font-semibold text-purple-900 mb-2">
-                        🟣 customfield_10306 핵심 로직
+                        🟣 프로필 link_field 핵심 로직
                       </h4>
                       <ul className="text-sm text-purple-800 space-y-1">
                         <li>
-                          • <strong>비어있음</strong>: AUTOWAY 티켓 신규 생성 후
-                          URL 저장
+                          • <strong>비어있음</strong>: 타겟 티켓 신규 생성 후
+                          소스 티켓의 link_field에 URL 저장
                         </li>
                         <li>
-                          • <strong>AUTOWAY 링크 있음</strong>: 정규식으로 키
-                          추출 후 업데이트
+                          • <strong>타겟 링크 있음</strong>: 정규식으로 키 추출
+                          후 업데이트
                         </li>
                         <li>
-                          • <strong>저장 형식</strong>:
-                          https://hmg.atlassian.net/browse/AUTOWAY-XXX
+                          • link_field는 sync_profiles 테이블에서 프로필별로
+                          설정
                         </li>
                       </ul>
                     </div>
 
-                    <div className="p-4 bg-blue-50 border-l-4 border-blue-500 rounded">
-                      <h4 className="font-semibold text-blue-900 mb-2">
-                        🔵 업데이트 필드 (AUTOWAY 전용)
+                    <div className="p-4 bg-cyan-50 border-l-4 border-cyan-500 rounded">
+                      <h4 className="font-semibold text-cyan-900 mb-2">
+                        🔷 부모 에픽 자동 확보
                       </h4>
-                      <ul className="text-sm text-blue-800 space-y-1">
-                        <li>• summary, description (ADF 형식)</li>
+                      <ul className="text-sm text-cyan-800 space-y-1">
                         <li>
-                          • duedate, customfield_10063 (End Date),
-                          customfield_10067 (Gantt End)
+                          • 신규 생성 시 소스 부모 에픽을 타겟에서
+                          &quot;[소스키] 에픽 제목&quot; 이름으로 매칭
                         </li>
                         <li>
-                          • customfield_10064 (Start Date), customfield_10065,
-                          customfield_10066 (Gantt Start)
+                          • 없으면 타겟 프로젝트에 에픽 신규 생성 (동시 요청은
+                          Promise dedup으로 중복 방지)
                         </li>
-                        <li>• assignee, reporter (hmg accountId로 변환)</li>
+                        <li>
+                          • 에픽 상태도 동기화 (타겟 에픽이 이미 완료 상태면
+                          보호 정책으로 스킵)
+                        </li>
                       </ul>
                     </div>
 
                     <div className="p-4 bg-green-50 border-l-4 border-green-500 rounded">
                       <h4 className="font-semibold text-green-900 mb-2">
-                        🟢 Transition API (HMG)
+                        🟢 상태 동기화 (HMG)
                       </h4>
                       <ul className="text-sm text-green-800 space-y-1">
-                        <li>• STATUS_MAPPING.HMG로 transitionId 조회</li>
                         <li>
-                          • POST /rest/api/3/issue/AUTOWAY-XXX/transitions
+                          • sync_profile_status_mappings로 목표 상태 결정
+                        </li>
+                        <li>
+                          • 런타임 BFS transition으로 multi-step 전이 자동
+                          처리
                         </li>
                         <li>• 신규 생성 후에도 상태 동기화 수행</li>
                       </ul>
@@ -653,16 +661,16 @@ flowchart TD
                       </h4>
                       <ul className="text-sm text-purple-800 space-y-1">
                         <li>
-                          • <strong>허용 목록 확인</strong>:
-                          ALLOWED_FEHG_TO_HMG_EPIC_IDS에 있으면 AUTOWAY만 동기화
+                          • <strong>허용 에픽 확인</strong>:
+                          sync_profile_allowed_epics에 해당 에픽이 있는
+                          프로필만 동기화 대상
                         </li>
                         <li>
-                          • <strong>Summary 분석</strong>: 에픽 제목에 [KQ],
-                          [HB], [HDD] 포함 여부로 대상 결정
+                          • <strong>목록이 비어있으면</strong>: 모든 에픽이
+                          해당 프로필의 동기화 대상
                         </li>
                         <li>
-                          • <strong>자동 판단</strong>: prefix 없으면 KQ, HB,
-                          HDD 모두 동기화
+                          • 허용하는 프로필이 하나도 없으면 동기화 없이 종료
                         </li>
                       </ul>
                     </div>
@@ -673,8 +681,8 @@ flowchart TD
                       </h4>
                       <ul className="text-sm text-blue-800 space-y-1">
                         <li>
-                          • JQL: &quot;Epic Link&quot; = FEHG-123 AND assignee =
-                          ...
+                          • JQL: parent = BE3-123 AND assignee = ... (에픽 전체
+                          모드에서는 담당자 무관)
                         </li>
                         <li>• 에픽에 속한 티켓만 선별적으로 동기화</li>
                         <li>
@@ -692,7 +700,9 @@ flowchart TD
                         <li>
                           • 신규 에픽을 생성하고 하위 티켓을 일괄 동기화할 때
                         </li>
-                        <li>• AUTOWAY 전용 에픽의 티켓들을 동기화할 때</li>
+                        <li>
+                          • 특정 타겟 프로필 전용 에픽의 티켓들을 동기화할 때
+                        </li>
                       </ul>
                     </div>
                   </>
@@ -702,20 +712,21 @@ flowchart TD
                   <>
                     <div className="p-4 bg-cyan-50 border-l-4 border-cyan-500 rounded">
                       <h4 className="font-semibold text-cyan-900 mb-2">
-                        🔷 3단계 대상 결정 로직
+                        🔷 대상 결정 로직
                       </h4>
                       <ul className="text-sm text-cyan-800 space-y-1">
                         <li>
-                          • <strong>1단계</strong>: issuelinks에서 Blocks 관계
-                          확인 (KQ/HB/HDD)
+                          • <strong>같은 인스턴스 타겟</strong>: issuelinks의
+                          Blocks 관계 + 타겟 키 prefix 확인
                         </li>
                         <li>
-                          • <strong>2단계</strong>: customfield_10306에 AUTOWAY
-                          링크 확인
+                          • <strong>HMG 타겟</strong>: 프로필 link_field에 타겟
+                          티켓 링크 확인
                         </li>
                         <li>
-                          • <strong>3단계</strong>: 상위 에픽이 허용 목록에
-                          있는지 확인
+                          • <strong>허용 에픽</strong>: 상위 에픽이
+                          sync_profile_allowed_epics에 있는지 확인 (비어있으면
+                          전체 허용)
                         </li>
                         <li>
                           • 모두 해당 없으면 &quot;동기화 대상 아님&quot; 경고

@@ -52,6 +52,7 @@ interface SyncProfile {
   mappingCount: number;
   linkField: string | null;
   sourceLinkField: string | null;
+  useEpicPrefix: boolean;
   epicCount: number;
   statusMappingCount: number;
   workflowCount: number;
@@ -316,8 +317,9 @@ export default function FieldMappingsPage() {
   const [sourceLinkField, setSourceLinkField] = useState('');
   const [sourceLinkFieldSearch, setSourceLinkFieldSearch] = useState('');
   const [sourceLinkFieldDropdownOpen, setSourceLinkFieldDropdownOpen] = useState(false);
+  const [useEpicPrefix, setUseEpicPrefix] = useState(true);
   const [selectedEpics, setSelectedEpics] = useState<AllowedEpic[]>([]);
-  const [fehgEpics, setFehgEpics] = useState<{ key: string; summary: string }[]>([]);
+  const [sourceEpics, setSourceEpics] = useState<{ key: string; summary: string }[]>([]);
   const [loadingEpics, setLoadingEpics] = useState(false);
   const [epicSearch, setEpicSearch] = useState('');
 
@@ -405,6 +407,8 @@ export default function FieldMappingsPage() {
           mappingCount: countMap[p.id] || 0,
           linkField: p.link_field || null,
           sourceLinkField: p.source_link_field || null,
+          // 컬럼 미존재/null이면 true(기존 동작: 말머리 사용)
+          useEpicPrefix: p.use_epic_prefix ?? true,
           epicCount: epicCountMap[p.id] || 0,
           statusMappingCount: statusCountMap[p.id] || 0,
           workflowCount: workflowCountMap[p.id] || 0,
@@ -492,6 +496,7 @@ export default function FieldMappingsPage() {
     setSourceLinkField('');
     setSourceLinkFieldSearch('');
     setSourceLinkFieldDropdownOpen(false);
+    setUseEpicPrefix(true);
     setSelectedEpics([]);
     if (projectId) {
       const project = projects.find((p) => p.id === projectId);
@@ -515,7 +520,7 @@ export default function FieldMappingsPage() {
     if (!sourceName) return;
 
     setLoadingEpics(true);
-    setFehgEpics([]);
+    setSourceEpics([]);
     try {
       const jql = `project = "${sourceName}" AND issuetype = 에픽 ORDER BY created DESC`;
       const allEpics: { key: string; summary: string }[] = [];
@@ -549,7 +554,7 @@ export default function FieldMappingsPage() {
         nextPageToken = result.data.nextPageToken;
       }
 
-      setFehgEpics(allEpics);
+      setSourceEpics(allEpics);
       if (allEpics.length > 0) {
         toast.success(`${allEpics.length}개 에픽을 조회했습니다.`);
       }
@@ -742,6 +747,7 @@ export default function FieldMappingsPage() {
             target_project_id: targetProjectId,
             link_field: isHmgTarget && linkField ? linkField : null,
             source_link_field: isHmgTarget && sourceLinkField ? sourceLinkField : null,
+            use_epic_prefix: isHmgTarget ? useEpicPrefix : true,
             updated_at: new Date().toISOString(),
           })
           .eq('id', editingId);
@@ -775,6 +781,7 @@ export default function FieldMappingsPage() {
             target_project_id: targetProjectId,
             link_field: isHmgTarget && linkField ? linkField : null,
             source_link_field: isHmgTarget && sourceLinkField ? sourceLinkField : null,
+            use_epic_prefix: isHmgTarget ? useEpicPrefix : true,
           })
           .select('id')
           .single();
@@ -931,6 +938,7 @@ export default function FieldMappingsPage() {
     // HMG 대상인 경우 link_field, source_link_field 및 allowed epics 로드
     setLinkField(profile.linkField || '');
     setSourceLinkField(profile.sourceLinkField || '');
+    setUseEpicPrefix(profile.useEpicPrefix);
     let epicsData: { epic_key: string; epic_summary?: string }[] | null = null;
     const targetInst = projects.find((p) => p.id === profile.targetProjectId)?.jiraInstance;
     if (targetInst === 'hmg') {
@@ -1056,8 +1064,9 @@ export default function FieldMappingsPage() {
     setSourceLinkField('');
     setSourceLinkFieldSearch('');
     setSourceLinkFieldDropdownOpen(false);
+    setUseEpicPrefix(true);
     setSelectedEpics([]);
-    setFehgEpics([]);
+    setSourceEpics([]);
     setEpicSearch('');
     setSourceStatuses([]);
     setTargetStatuses([]);
@@ -1134,7 +1143,7 @@ export default function FieldMappingsPage() {
             매핑 이름 <span className="text-destructive">*</span>
           </label>
           <Input
-            placeholder="예: FEHG → AUTOWAY 동기화"
+            placeholder="예: BE3 -> DEVOPS"
             value={formName}
             onChange={(e) => setFormName(e.target.value)}
             className="max-w-md"
@@ -1441,6 +1450,30 @@ export default function FieldMappingsPage() {
                 </p>
               </div>
 
+              {/* 에픽 말머리 사용 여부 */}
+              <div className="space-y-1">
+                <button
+                  type="button"
+                  className="flex items-center gap-2 text-xs font-medium cursor-pointer"
+                  onClick={() => setUseEpicPrefix((prev) => !prev)}
+                >
+                  <span
+                    className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
+                      useEpicPrefix
+                        ? 'bg-amber-500 border-amber-500 text-white'
+                        : 'border-muted-foreground/25 bg-background'
+                    }`}
+                  >
+                    {useEpicPrefix && <Check className="h-3 w-3" />}
+                  </span>
+                  에픽 말머리([소스키]) 사용
+                </button>
+                <p className="text-[11px] text-muted-foreground pl-6">
+                  켜면 타겟 에픽을 &quot;[소스 프로젝트 키] 소스 에픽 이름&quot;으로 매칭/생성합니다.
+                  끄면 말머리 없이 소스 에픽 이름 그대로 타겟의 기존 에픽을 재활용합니다.
+                </p>
+              </div>
+
               {/* 에픽 선택 */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -1456,12 +1489,12 @@ export default function FieldMappingsPage() {
                     {loadingEpics ? (
                       <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
                     ) : null}
-                    {fehgEpics.length > 0 ? '새로고침' : '에픽 목록 조회'}
+                    {sourceEpics.length > 0 ? '새로고침' : '에픽 목록 조회'}
                   </Button>
                 </div>
 
                 {/* 선택된 에픽 (에픽 목록 조회 전에도 표시) */}
-                {selectedEpics.length > 0 && fehgEpics.length === 0 && !loadingEpics && (
+                {selectedEpics.length > 0 && sourceEpics.length === 0 && !loadingEpics && (
                   <div className="border rounded-md overflow-hidden bg-background">
                     <div className="flex items-center justify-between px-2.5 py-1.5 bg-muted/30 border-b">
                       <span className="text-[11px] font-medium text-muted-foreground">
@@ -1512,7 +1545,7 @@ export default function FieldMappingsPage() {
                 )}
 
                 {/* 에픽 목록이 로드된 경우 */}
-                {!loadingEpics && fehgEpics.length > 0 && (
+                {!loadingEpics && sourceEpics.length > 0 && (
                   <div className="border rounded-md overflow-hidden bg-background">
                     {/* 헤더: 검색 + 카운트 */}
                     <div className="flex items-center gap-2 border-b px-2 py-1.5 bg-muted/30">
@@ -1525,7 +1558,7 @@ export default function FieldMappingsPage() {
                         className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
                       />
                       <span className="text-[10px] text-muted-foreground shrink-0">
-                        {selectedEpics.length}/{fehgEpics.length} 선택
+                        {selectedEpics.length}/{sourceEpics.length} 선택
                       </span>
                     </div>
 
@@ -1567,7 +1600,7 @@ export default function FieldMappingsPage() {
 
                     {/* 에픽 리스트 */}
                     <div className="max-h-56 overflow-y-auto divide-y">
-                      {fehgEpics
+                      {sourceEpics
                         .filter((epic) => {
                           if (!epicSearch.trim()) return true;
                           const q = epicSearch.toLowerCase();

@@ -16,6 +16,10 @@ interface DbFieldMapping {
 // 프로필별 매핑 캐시 (동기화 세션 동안 유지)
 const mappingCache = new Map<string, DbFieldMapping[]>();
 
+// Jira REST가 fields 페이로드로 설정을 허용하지 않는 필드 — 매핑에 있어도 제외
+// (comment/worklog/attachment는 전용 엔드포인트로만 추가 가능)
+const NON_FIELD_UPDATABLE = ['comment', 'worklog', 'attachment'];
+
 /**
  * 프로필의 필드 매핑 조회 (캐시)
  */
@@ -29,7 +33,9 @@ async function getFieldMappings(profileId: string): Promise<DbFieldMapping[]> {
     .select('source_field, target_field, transform_type, transform_config')
     .eq('profile_id', profileId);
 
-  const mappings = data || [];
+  const mappings = (data || []).filter(
+    (m) => !NON_FIELD_UPDATABLE.includes(m.target_field)
+  );
   mappingCache.set(profileId, mappings);
   return mappings;
 }
@@ -55,7 +61,7 @@ export function clearDbMappingCache() {
 
 /**
  * DB 기반 필드 매핑 실행
- * sync_field_mappings에 저장된 규칙에 따라 FEHG 티켓 필드를 대상 필드로 변환
+ * sync_field_mappings에 저장된 규칙에 따라 소스 티켓 필드를 대상 필드로 변환
  */
 const ACCOUNT_FIELDS = ['assignee', 'reporter', 'creator'];
 
@@ -70,14 +76,14 @@ export interface TeamUserForMapping {
 }
 
 export async function mapFieldsFromDb(
-  fehgTicket: JiraIssue,
+  sourceTicket: JiraIssue,
   profileId: string,
   targetProjectKey: string,
   teamUsers?: TeamUserForMapping[]
 ): Promise<Record<string, unknown>> {
   const mappings = await getFieldMappings(profileId);
   const fields: Record<string, unknown> = {};
-  const fehgFields = fehgTicket.fields;
+  const sourceFields = sourceTicket.fields;
 
   // 프로필의 소스/타겟 인스턴스가 다른지 확인
   const profileInfo = await getSyncProfileInfo(profileId);
@@ -105,7 +111,7 @@ export async function mapFieldsFromDb(
     switch (effectiveTransformType) {
       case 'copy': {
         // 단순 복사
-        const value = getFieldValue(fehgTicket, fehgFields, source_field);
+        const value = getFieldValue(sourceTicket, sourceFields, source_field);
         if (value !== undefined && value !== null) {
           // assignee는 accountId 형태로 래핑
           if (source_field === 'assignee' && typeof value === 'object' && value !== null && 'accountId' in value) {
@@ -121,15 +127,15 @@ export async function mapFieldsFromDb(
       }
 
       case 'sprint_map': {
-        // 스프린트 매핑 (FEHG 스프린트 이름 → 대상 프로젝트 스프린트 ID)
-        const sprint = fehgFields[source_field] as
+        // 스프린트 매핑 (소스 스프린트 이름 → 대상 프로젝트 스프린트 ID)
+        const sprint = sourceFields[source_field] as
           | Array<{ id: number; name: string }>
           | undefined;
 
         if (sprint && sprint.length > 0) {
           const mappedSprintId = await mapSprintToTarget(
             sprint[0].name,
-            targetProjectKey as 'KQ' | 'HDD' | 'HMGBOARD' | 'AUTOWAY'
+            targetProjectKey
           );
           if (mappedSprintId) {
             fields[target_field] = mappedSprintId;
@@ -140,7 +146,7 @@ export async function mapFieldsFromDb(
 
       case 'account_map': {
         // 계정 매핑 (Ignite accountId → HMG accountId)
-        const sourceValue = getFieldValue(fehgTicket, fehgFields, source_field);
+        const sourceValue = getFieldValue(sourceTicket, sourceFields, source_field);
         if (sourceValue && typeof sourceValue === 'object' && 'accountId' in sourceValue) {
           const igniteAccountId = (sourceValue as { accountId: string }).accountId;
 
@@ -163,7 +169,7 @@ export async function mapFieldsFromDb(
 
       default: {
         // 알 수 없는 transform_type → copy로 폴백
-        const fallbackValue = getFieldValue(fehgTicket, fehgFields, source_field);
+        const fallbackValue = getFieldValue(sourceTicket, sourceFields, source_field);
         if (fallbackValue !== undefined && fallbackValue !== null) {
           fields[target_field] = fallbackValue;
         }
@@ -209,6 +215,8 @@ export interface SyncProfileInfo {
   targetInstance: string;
   sourceProjectKey: string;
   sourceInstance: string;
+  /** 에픽 말머리("[소스키] ") 사용 여부. 컬럼 미존재/null이면 true(기존 동작) */
+  useEpicPrefix: boolean;
 }
 
 const profileInfoCache = new Map<string, SyncProfileInfo>();
@@ -218,10 +226,12 @@ export async function getSyncProfileInfo(profileId: string): Promise<SyncProfile
     return profileInfoCache.get(profileId)!;
   }
 
+  // use_epic_prefix는 컬럼 명시 대신 *로 조회
+  // (마이그레이션 미적용 환경에서도 select 에러 없이 동작 → undefined → true 폴백)
   const { data } = await dbServer
     .from('sync_profiles')
     .select(`
-      id, name, link_field, source_link_field,
+      *,
       source:source_project_id(name, jira_instance),
       target:target_project_id(name, jira_instance)
     `)
@@ -242,6 +252,8 @@ export async function getSyncProfileInfo(profileId: string): Promise<SyncProfile
     targetInstance: target.jira_instance,
     sourceProjectKey: source.name,
     sourceInstance: source.jira_instance,
+    useEpicPrefix:
+      (data as { use_epic_prefix?: boolean | null }).use_epic_prefix ?? true,
   };
 
   profileInfoCache.set(profileId, info);
@@ -269,7 +281,7 @@ export async function getAllowedEpicsFromDb(profileId: string): Promise<string[]
 }
 
 /**
- * FEHG 티켓에서 필드 값 추출
+ * 소스 티켓에서 필드 값 추출
  */
 function getFieldValue(
   ticket: JiraIssue,

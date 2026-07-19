@@ -42,7 +42,7 @@ async function main() {
     process.exit(1);
   }
 
-  const teamName = process.env.SYNC_TEAM_NAME || 'FE1';
+  const teamName = process.env.SYNC_TEAM_NAME || 'be3';
   const teamId = await getTeamIdByName(teamName);
   if (!teamId) {
     console.error(`팀 '${teamName}'을 찾을 수 없습니다.`);
@@ -97,7 +97,7 @@ async function main() {
         assigneeAccountId: user.igniteAccountId,
         assigneeName: user.name,
         teamUsers: users,
-        targetProjects: undefined, // 전체 (KQ, HDD, AUTOWAY, HMGBOARD)
+        targetProjects: undefined, // 전체 (DB의 소스 프로젝트 프로필 전체 대상)
         chunkSize: 15,
       });
 
@@ -148,7 +148,7 @@ async function main() {
   console.log(`  총 실패: ${totalFailed}건`);
   console.log(`  실행 오류 담당자: ${userErrors}명`);
 
-  // 결과 이메일 발송 (fedev1@ignite.co.kr로 매일 1회)
+  // 결과 이메일 발송 (SYNC_NOTIFY_EMAIL로 매일 1회)
   const syncDate = new Date().toISOString().slice(0, 10);
   const hasResendKey = !!process.env.RESEND_API_KEY;
 
@@ -167,7 +167,7 @@ async function main() {
 
       if (result.summary.failedResults.length > 0) {
         const failures = result.summary.failedResults.map((fr) => ({
-          ticketKey: fr.fehgKey || fr.targetKey,
+          ticketKey: fr.sourceKey || fr.targetKey,
           error: fr.error || '알 수 없는 오류',
         }));
         userFailures.push({ userName: result.name, failures });

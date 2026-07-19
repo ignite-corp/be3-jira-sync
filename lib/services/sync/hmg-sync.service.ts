@@ -1,34 +1,29 @@
-// HMG Jira 프로젝트 동기화 (FEHG → AUTOWAY)
+// HMG Jira 인스턴스 동기화 (소스 프로젝트 → HMG 타겟 프로젝트)
+// 매핑 규칙은 전부 DB sync_profile 기반
 
 import { JiraIssue, JiraIssueCreatePayload } from '@/lib/types/jira';
 import { SyncResult } from './types';
 import { SyncLogger } from './logger';
-import { mapFieldsForAutoway } from './field-mapper';
-import { mapFieldsFromDb, getSyncProfileInfo } from './db-field-mapper';
+import { mapFieldsFromDb, getSyncProfileInfo, SyncProfileInfo } from './db-field-mapper';
 import { SyncOptions } from './types';
-import { syncStatusWithPath, syncStatusWithPathFromDb } from './transition-helper';
+import { syncStatusWithPathFromDb } from './transition-helper';
 import { jira } from '@/lib/services/jira';
-import { IGNITE_CUSTOM_FIELDS, JIRA_ENDPOINTS } from '@/lib/constants/jira';
+import { JIRA_ENDPOINTS } from '@/lib/constants/jira';
 import { ensureTargetEpic } from './epic-resolver';
 
-// AUTOWAY/HMGBOARD의 Epic Link 커스텀 필드 (자식 → 부모 에픽 연결)
+// HMG Jira의 Epic Link 커스텀 필드 (자식 → 부모 에픽 연결)
 const HMG_EPIC_LINK_FIELD = 'customfield_10014';
 
 /**
  * HMG 프로젝트별 이슈타입 ID 캐시
- * - 프로젝트마다 허용되는 이슈타입이 다름 (AUTOWAY: 작업/Task, HMGBOARD: 개발처리 등)
+ * - 프로젝트마다 허용되는 이슈타입이 다름
  */
 const createIssueTypeIdCache: Map<string, string> = new Map();
 
 /**
- * HMG 프로젝트별 선호 이슈타입 이름 (위에서부터 우선 매칭)
+ * 신규 생성 시 선호 이슈타입 이름 (위에서부터 우선 매칭)
  */
-const PREFERRED_ISSUETYPE_NAMES: Record<string, string[]> = {
-  AUTOWAY: ['작업', 'Task', '업무', '스토리', 'Story', '버그', 'Bug'],
-  HMGBOARD: ['개발처리', '스토리', 'Story', '운영업무', '버그', 'Bug'],
-};
-
-const DEFAULT_PREFERRED_NAMES = [
+const PREFERRED_ISSUETYPE_NAMES = [
   '작업',
   'Task',
   '업무',
@@ -40,23 +35,26 @@ const DEFAULT_PREFERRED_NAMES = [
 
 /**
  * HMG 프로젝트 동기화 서비스
- * FEHG → AUTOWAY/HMGBOARD 동기화 담당
+ * 소스 티켓 → HMG 타겟 프로젝트 동기화 담당 (DB 프로필 필수)
  */
 export class HMGSyncService {
   constructor(private logger: SyncLogger) {}
 
   /**
-   * FEHG 부모 에픽이 있으면 대상 프로젝트의 동일 이름 에픽을 찾거나 신규 생성해서
+   * 소스 부모 에픽이 있으면 대상 프로젝트의 동일 이름 에픽을 찾거나 신규 생성해서
    * mappedFields에 Epic Link(customfield_10014)를 주입.
-   * 규칙: target summary = "[FEHG] " + FEHG 부모 summary (이미 [FEHG] 시작이면 그대로)
+   * 규칙: target summary = "[{소스 키}] " + 소스 부모 summary
+   *       (프로필 use_epic_prefix가 false면 말머리 없이 소스 summary 그대로)
    */
   private async injectEpicLink(
-    fehgTicket: JiraIssue,
-    targetProjectKey: 'AUTOWAY' | 'HMGBOARD',
+    sourceTicket: JiraIssue,
+    targetProjectKey: string,
     mappedFields: Record<string, unknown>,
-    syncProfileId?: string
+    syncProfileId: string | undefined,
+    usePrefix: boolean,
+    linkField: string | null
   ): Promise<void> {
-    const parent = fehgTicket.fields.parent;
+    const parent = sourceTicket.fields.parent;
     if (!parent?.key || !parent.fields?.summary) {
       return;
     }
@@ -64,7 +62,9 @@ export class HMGSyncService {
       { key: parent.key, summary: parent.fields.summary },
       targetProjectKey,
       this.logger,
-      syncProfileId
+      syncProfileId,
+      usePrefix,
+      linkField
     );
     if (epicKey) {
       mappedFields[HMG_EPIC_LINK_FIELD] = epicKey;
@@ -80,8 +80,7 @@ export class HMGSyncService {
       return { id: cached };
     }
 
-    const fallbackName =
-      PREFERRED_ISSUETYPE_NAMES[targetProjectKey]?.[0] ?? '작업';
+    const fallbackName = PREFERRED_ISSUETYPE_NAMES[0];
 
     try {
       const projectResult = await jira.hmg.getProject(targetProjectKey);
@@ -103,12 +102,10 @@ export class HMGSyncService {
       }
 
       const nonSubtaskTypes = issueTypes.filter((t) => !t.subtask);
-      const preferredNames =
-        PREFERRED_ISSUETYPE_NAMES[targetProjectKey] ?? DEFAULT_PREFERRED_NAMES;
 
       // 선호 이름 순서대로 매칭 (먼저 나오는 게 더 우선)
       let preferred: typeof nonSubtaskTypes[number] | undefined;
-      for (const name of preferredNames) {
+      for (const name of PREFERRED_ISSUETYPE_NAMES) {
         preferred = nonSubtaskTypes.find((t) => t.name === name);
         if (preferred) break;
       }
@@ -131,23 +128,36 @@ export class HMGSyncService {
   }
 
   /**
-   * FEHG 티켓을 AUTOWAY로 동기화
+   * 소스 티켓을 HMG 타겟 프로젝트로 동기화 (DB 프로필 필수)
    */
   async syncTicket(
-    fehgTicket: JiraIssue,
-    assigneeAccountId: string,
+    sourceTicket: JiraIssue,
     teamUsers?: SyncOptions['teamUsers'],
     syncProfileId?: string
   ): Promise<SyncResult | null> {
     try {
-      // DB 기반: 프로필에서 link_field와 target project 조회
+      // DB 프로필에서 link_field와 target project 조회
       const profileInfo = syncProfileId ? await getSyncProfileInfo(syncProfileId) : null;
-      const linkFieldId = profileInfo?.linkField || IGNITE_CUSTOM_FIELDS.HMG_JIRA_LINK;
-      const targetProjectKey = profileInfo?.targetProjectKey || 'AUTOWAY';
+      if (!syncProfileId || !profileInfo) {
+        this.logger.error(
+          `${sourceTicket.key}: 동기화 프로필 없음 - HMG 동기화는 DB 프로필이 필요합니다`
+        );
+        return null;
+      }
 
-      const customFields = fehgTicket.fields;
+      const linkFieldId = profileInfo.linkField;
+      const targetProjectKey = profileInfo.targetProjectKey;
+
+      if (!linkFieldId) {
+        this.logger.error(
+          `${sourceTicket.key}: 프로필(${profileInfo.name})에 link_field 미설정 - 동기화 불가`
+        );
+        return null;
+      }
+
+      const customFields = sourceTicket.fields;
       const rawLink = customFields[linkFieldId];
-      const hmgLinkField =
+      const targetLinkValue =
         typeof rawLink === 'string'
           ? rawLink.trim()
           : Array.isArray(rawLink)
@@ -158,22 +168,21 @@ export class HMGSyncService {
               ? String((rawLink as { value?: unknown }).value ?? '').trim()
               : '';
 
-      if (hmgLinkField) {
+      if (targetLinkValue) {
         this.logger.info(
-          `${fehgTicket.key}: ${linkFieldId} 감지됨 → ${hmgLinkField}`
+          `${sourceTicket.key}: ${linkFieldId} 감지됨 → ${targetLinkValue}`
         );
       } else {
         this.logger.info(
-          `${fehgTicket.key}: ${linkFieldId} 비어 있음 → 신규 생성`
+          `${sourceTicket.key}: ${linkFieldId} 비어 있음 → 신규 생성`
         );
       }
 
       // link field 확인 및 분기
       const targetKeyPattern = new RegExp(`${targetProjectKey}-\\d+`);
-      if (!hmgLinkField || !targetKeyPattern.test(hmgLinkField)) {
-        return await this.createAndLinkAutowayTicket(
-          fehgTicket,
-          assigneeAccountId,
+      if (!targetLinkValue || !targetKeyPattern.test(targetLinkValue)) {
+        return await this.createAndLinkTicket(
+          sourceTicket,
           teamUsers,
           syncProfileId,
           profileInfo
@@ -181,25 +190,23 @@ export class HMGSyncService {
       }
 
       // 기존 티켓 업데이트 플로우
-      const match = hmgLinkField.match(new RegExp(`(${targetProjectKey}-\\d+)`));
+      const match = targetLinkValue.match(new RegExp(`(${targetProjectKey}-\\d+)`));
       const targetKey = match ? match[1] : null;
       if (!targetKey) {
         this.logger.warning(
-          `${fehgTicket.key}: ${targetProjectKey} 키 추출 실패 (${hmgLinkField}) - 신규 생성`
+          `${sourceTicket.key}: ${targetProjectKey} 키 추출 실패 (${targetLinkValue}) - 신규 생성`
         );
-        return await this.createAndLinkAutowayTicket(
-          fehgTicket,
-          assigneeAccountId,
+        return await this.createAndLinkTicket(
+          sourceTicket,
           teamUsers,
           syncProfileId,
           profileInfo
         );
       }
 
-      return await this.updateAutowayTicket(
-        fehgTicket,
+      return await this.updateTicket(
+        sourceTicket,
         targetKey,
-        assigneeAccountId,
         teamUsers,
         syncProfileId,
         profileInfo
@@ -208,57 +215,56 @@ export class HMGSyncService {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       this.logger.error(
-        `${fehgTicket.key}: AUTOWAY 동기화 실패 - ${errorMessage}`
+        `${sourceTicket.key}: HMG 동기화 실패 - ${errorMessage}`
       );
       return null;
     }
   }
 
   /**
-   * AUTOWAY 티켓 신규 생성 및 FEHG에 링크
+   * HMG 타겟 티켓 신규 생성 및 소스 티켓에 링크
    */
-  private async createAndLinkAutowayTicket(
-    fehgTicket: JiraIssue,
-    assigneeAccountId: string,
-    teamUsers?: SyncOptions['teamUsers'],
-    syncProfileId?: string,
-    profileInfo?: { linkField: string | null; sourceLinkField?: string | null; targetProjectKey: string; targetInstance: string } | null
+  private async createAndLinkTicket(
+    sourceTicket: JiraIssue,
+    teamUsers: SyncOptions['teamUsers'],
+    syncProfileId: string,
+    profileInfo: SyncProfileInfo
   ): Promise<SyncResult> {
-    const targetProjectKey = profileInfo?.targetProjectKey || 'AUTOWAY';
-    const linkFieldId = profileInfo?.linkField || IGNITE_CUSTOM_FIELDS.HMG_JIRA_LINK;
+    const targetProjectKey = profileInfo.targetProjectKey;
+    const linkFieldId = profileInfo.linkField!;
 
     try {
-      this.logger.info(`${fehgTicket.key}: ${targetProjectKey} 티켓 생성 시작...${syncProfileId ? ' (DB 매핑)' : ''}`);
+      this.logger.info(`${sourceTicket.key}: ${targetProjectKey} 티켓 생성 시작... (DB 매핑)`);
 
-      // 1. 필드 매핑 (DB 기반 또는 하드코딩)
-      const mappedFields = syncProfileId
-        ? await mapFieldsFromDb(fehgTicket, syncProfileId, targetProjectKey, teamUsers)
-        : await mapFieldsForAutoway(
-            fehgTicket,
-            assigneeAccountId,
-            teamUsers,
-            targetProjectKey as 'AUTOWAY' | 'HMGBOARD'
-          );
-
-      // 1-1. 부모 에픽 주입 (FEHG 부모 에픽이 있으면 대상 측 에픽 매칭/생성/상태동기화)
-      await this.injectEpicLink(
-        fehgTicket,
-        targetProjectKey as 'AUTOWAY' | 'HMGBOARD',
-        mappedFields,
-        syncProfileId
+      // 1. 필드 매핑 (DB 기반)
+      const mappedFields = await mapFieldsFromDb(
+        sourceTicket,
+        syncProfileId,
+        targetProjectKey,
+        teamUsers
       );
 
-      const autowayIssueType = await this.resolveCreateIssueType(targetProjectKey);
+      // 1-1. 부모 에픽 주입 (소스 부모 에픽이 있으면 대상 측 에픽 매칭/생성/상태동기화)
+      await this.injectEpicLink(
+        sourceTicket,
+        targetProjectKey,
+        mappedFields,
+        syncProfileId,
+        profileInfo.useEpicPrefix,
+        profileInfo.linkField
+      );
+
+      const targetIssueType = await this.resolveCreateIssueType(targetProjectKey);
 
       // 2. 소스 링크 필드 병합
-      const sourceLinkFields = this.getSourceLinkFields(fehgTicket.key, profileInfo);
+      const sourceLinkFields = this.getSourceLinkFields(sourceTicket.key, profileInfo);
 
       // 3. 티켓 생성
       const createPayload: JiraIssueCreatePayload = {
         fields: {
           project: { key: targetProjectKey },
-          issuetype: autowayIssueType,
-          summary: fehgTicket.fields.summary,
+          issuetype: targetIssueType,
+          summary: sourceTicket.fields.summary,
           ...mappedFields,
           ...sourceLinkFields,
         },
@@ -272,7 +278,7 @@ export class HMGSyncService {
         ).details;
         if (errorDetails) {
           this.logger.error(
-            `${fehgTicket.key}: Jira API 에러 상세 → ${JSON.stringify(errorDetails)}`
+            `${sourceTicket.key}: Jira API 에러 상세 → ${JSON.stringify(errorDetails)}`
           );
         }
         throw new Error(createResult.error || `${targetProjectKey} 티켓 생성 실패`);
@@ -281,27 +287,27 @@ export class HMGSyncService {
       const createdKey = createResult.data.key;
       this.logger.success(`${createdKey}: ${targetProjectKey} 티켓 생성 완료`);
 
-      // 4. FEHG 티켓의 link field에 URL 저장
+      // 4. 소스 티켓의 link field에 URL 저장
       const targetUrl = `${JIRA_ENDPOINTS.HMG}/browse/${createdKey}`;
-      const linkResult = await jira.ignite.updateIssueFields(fehgTicket.key, {
+      const linkResult = await jira.ignite.updateIssueFields(sourceTicket.key, {
         [linkFieldId]: targetUrl,
       });
 
       if (!linkResult.success) {
         this.logger.warning(
-          `${fehgTicket.key}: ${targetProjectKey} 링크 저장 실패 (티켓은 생성됨)`
+          `${sourceTicket.key}: ${targetProjectKey} 링크 저장 실패 (티켓은 생성됨)`
         );
       } else {
-        this.logger.success(`${fehgTicket.key}: ${targetProjectKey} 링크 저장 완료`);
+        this.logger.success(`${sourceTicket.key}: ${targetProjectKey} 링크 저장 완료`);
       }
 
       // 5. 상태 동기화
-      await this.syncAutowayStatus(fehgTicket, createdKey, syncProfileId);
+      await this.syncTargetStatus(sourceTicket, createdKey, syncProfileId);
 
       return {
-        fehgKey: fehgTicket.key,
+        sourceKey: sourceTicket.key,
         targetKey: createdKey,
-        targetProject: targetProjectKey as 'AUTOWAY' | 'HMGBOARD',
+        targetProject: targetProjectKey,
         success: true,
         message: '신규 생성 및 동기화 완료',
         isNewlyCreated: true,
@@ -310,13 +316,13 @@ export class HMGSyncService {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       this.logger.error(
-        `${fehgTicket.key}: ${targetProjectKey} 생성 실패 - ${errorMessage}`
+        `${sourceTicket.key}: ${targetProjectKey} 생성 실패 - ${errorMessage}`
       );
 
       return {
-        fehgKey: fehgTicket.key,
+        sourceKey: sourceTicket.key,
         targetKey: '',
-        targetProject: targetProjectKey as 'AUTOWAY' | 'HMGBOARD',
+        targetProject: targetProjectKey,
         success: false,
         error: errorMessage,
       };
@@ -324,41 +330,40 @@ export class HMGSyncService {
   }
 
   /**
-   * 기존 AUTOWAY 티켓 업데이트
+   * 기존 HMG 타겟 티켓 업데이트
    */
-  private async updateAutowayTicket(
-    fehgTicket: JiraIssue,
+  private async updateTicket(
+    sourceTicket: JiraIssue,
     targetKey: string,
-    assigneeAccountId: string,
-    teamUsers?: SyncOptions['teamUsers'],
-    syncProfileId?: string,
-    profileInfo?: { targetProjectKey: string; sourceLinkField?: string | null } | null
+    teamUsers: SyncOptions['teamUsers'],
+    syncProfileId: string,
+    profileInfo: SyncProfileInfo
   ): Promise<SyncResult> {
-    const targetProjectKey = profileInfo?.targetProjectKey || 'AUTOWAY';
+    const targetProjectKey = profileInfo.targetProjectKey;
 
     try {
-      this.logger.info(`${targetKey}: 업데이트 시작...${syncProfileId ? ' (DB 매핑)' : ''}`);
+      this.logger.info(`${targetKey}: 업데이트 시작... (DB 매핑)`);
 
-      // 1. 필드 매핑 (DB 기반 또는 하드코딩)
-      const mappedFields = syncProfileId
-        ? await mapFieldsFromDb(fehgTicket, syncProfileId, targetProjectKey, teamUsers)
-        : await mapFieldsForAutoway(
-            fehgTicket,
-            assigneeAccountId,
-            teamUsers,
-            targetProjectKey as 'AUTOWAY' | 'HMGBOARD'
-          );
+      // 1. 필드 매핑 (DB 기반)
+      const mappedFields = await mapFieldsFromDb(
+        sourceTicket,
+        syncProfileId,
+        targetProjectKey,
+        teamUsers
+      );
 
-      // 1-1. 부모 에픽 주입 (FEHG 부모 에픽이 있으면 대상 측 에픽 매칭/생성/상태동기화)
+      // 1-1. 부모 에픽 주입 (소스 부모 에픽이 있으면 대상 측 에픽 매칭/생성/상태동기화)
       await this.injectEpicLink(
-        fehgTicket,
-        targetProjectKey as 'AUTOWAY' | 'HMGBOARD',
+        sourceTicket,
+        targetProjectKey,
         mappedFields,
-        syncProfileId
+        syncProfileId,
+        profileInfo.useEpicPrefix,
+        profileInfo.linkField
       );
 
       // 2. 소스 링크 필드 병합
-      const sourceLinkFields = this.getSourceLinkFields(fehgTicket.key, profileInfo);
+      const sourceLinkFields = this.getSourceLinkFields(sourceTicket.key, profileInfo);
       const allFields = { ...mappedFields, ...sourceLinkFields };
 
       // 3. 필드 매핑 로그
@@ -386,12 +391,12 @@ export class HMGSyncService {
       this.logger.success(`${targetKey}: 필드 업데이트 완료`);
 
       // 5. 상태 동기화
-      await this.syncAutowayStatus(fehgTicket, targetKey, syncProfileId);
+      await this.syncTargetStatus(sourceTicket, targetKey, syncProfileId);
 
       return {
-        fehgKey: fehgTicket.key,
+        sourceKey: sourceTicket.key,
         targetKey,
-        targetProject: targetProjectKey as 'AUTOWAY' | 'HMGBOARD',
+        targetProject: targetProjectKey,
         success: true,
         message: '동기화 완료',
         isNewlyCreated: false,
@@ -402,9 +407,9 @@ export class HMGSyncService {
       this.logger.error(`${targetKey}: 업데이트 실패 - ${errorMessage}`);
 
       return {
-        fehgKey: fehgTicket.key,
+        sourceKey: sourceTicket.key,
         targetKey,
-        targetProject: targetProjectKey as 'AUTOWAY' | 'HMGBOARD',
+        targetProject: targetProjectKey,
         success: false,
         error: errorMessage,
       };
@@ -415,24 +420,24 @@ export class HMGSyncService {
    * 소스 티켓 원본 링크 필드를 반환 (mappedFields에 병합용)
    */
   private getSourceLinkFields(
-    fehgKey: string,
+    sourceKey: string,
     profileInfo?: { sourceLinkField?: string | null } | null
   ): Record<string, string> {
     const sourceLinkField = profileInfo?.sourceLinkField;
     if (!sourceLinkField) return {};
-    return { [sourceLinkField]: `${JIRA_ENDPOINTS.IGNITE}/browse/${fehgKey}` };
+    return { [sourceLinkField]: `${JIRA_ENDPOINTS.IGNITE}/browse/${sourceKey}` };
   }
 
   /**
-   * AUTOWAY 티켓 상태 동기화 (동적 경로 탐색 사용)
+   * HMG 타겟 티켓 상태 동기화 (동적 경로 탐색 사용)
    */
-  private async syncAutowayStatus(
-    fehgTicket: JiraIssue,
+  private async syncTargetStatus(
+    sourceTicket: JiraIssue,
     targetKey: string,
-    syncProfileId?: string
+    syncProfileId: string
   ): Promise<void> {
-    const fehgStatusId = fehgTicket.fields.status?.id;
-    if (!fehgStatusId) return;
+    const sourceStatusId = sourceTicket.fields.status?.id;
+    if (!sourceStatusId) return;
 
     try {
       // 1. 현재 타겟 티켓의 상태 조회
@@ -448,7 +453,7 @@ export class HMGSyncService {
         return;
       }
 
-      // 2. DB 기반 또는 하드코딩 상태 동기화
+      // 2. DB 기반 상태 동기화
       const executeTransitionFn = async (issueKey: string, transitionId: string) => {
         return await jira.hmg.updateIssueStatus(issueKey, transitionId);
       };
@@ -461,24 +466,15 @@ export class HMGSyncService {
         return [];
       };
 
-      const result = syncProfileId
-        ? await syncStatusWithPathFromDb(
-            syncProfileId,
-            targetKey,
-            fehgStatusId,
-            currentStatusId,
-            executeTransitionFn,
-            this.logger,
-            getTransitionsFn
-          )
-        : await syncStatusWithPath(
-            'hmg',
-            targetKey,
-            fehgStatusId,
-            currentStatusId,
-            executeTransitionFn,
-            this.logger
-          );
+      const result = await syncStatusWithPathFromDb(
+        syncProfileId,
+        targetKey,
+        sourceStatusId,
+        currentStatusId,
+        executeTransitionFn,
+        this.logger,
+        getTransitionsFn
+      );
 
       if (!result.success && result.stepsExecuted > 0) {
         this.logger.warning(
