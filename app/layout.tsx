@@ -5,8 +5,8 @@ import { UserProvider } from '@/contexts/user-context';
 import { GlobalHeaderStrip } from '@/components/global-header-strip';
 
 export const metadata: Metadata = {
-  title: 'FE1 Jira 통합 관리',
-  description: '이그나이트 FE1 팀 Jira 자동화 및 통합 관리 도구',
+  title: 'BE3 Jira 통합 관리',
+  description: '이그나이트 BE3 팀 Jira 자동화 및 통합 관리 도구',
 };
 
 export default function RootLayout({
