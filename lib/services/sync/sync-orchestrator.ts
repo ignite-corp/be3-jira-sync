@@ -43,7 +43,7 @@ export class SyncOrchestrator {
   }
 
   /**
-   * 동기화 대상 마감일 기준일 계산 (현재 시점 - 1개월)
+   * 동기화 대상 기준일 계산 (현재 시점 - 1개월)
    * 예: 오늘이 4/8이면 3/8 반환
    */
   static getCutoffDate(): string {
@@ -296,8 +296,11 @@ export class SyncOrchestrator {
     // 일반 모드: 담당자의 모든 티켓 (완료 포함, 페이지네이션 자동 처리)
     this.logger.info('담당자의 모든 티켓 조회 중...');
     const cutoffDate = SyncOrchestrator.getCutoffDate();
-    const jql = `project = ${sourceProjectKey} AND assignee = "${options.assigneeAccountId}" AND due >= "${cutoffDate}" ORDER BY updated DESC`;
-    this.logger.info(`마감일 기준: ${cutoffDate} 이후`);
+    // 기한(due) 대신 수정일(updated) 기준.
+    // due >= X 는 기한이 비어 있는 티켓을 제외해 BE3 244건 중 82건이 영영 누락됐다.
+    // updated 는 항상 존재하고, 한 달간 수정이 없는 티켓은 전파할 변경도 없다.
+    const jql = `project = ${sourceProjectKey} AND assignee = "${options.assigneeAccountId}" AND updated >= "${cutoffDate}" ORDER BY updated DESC`;
+    this.logger.info(`수정일 기준: ${cutoffDate} 이후`);
 
     this.logger.info(`담당자: ${options.assigneeName || '알 수 없음'}`);
 
