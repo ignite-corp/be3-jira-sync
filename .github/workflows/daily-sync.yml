@@ -4,9 +4,17 @@ on:
   schedule:
     # 평일(월~금) 한국시간 오전 7시 30분 (UTC 전날 22:30: 일~목)
     - cron: '30 22 * * 0-4'
-    # 평일(월~금) 한국시간 낮 12시 (UTC 당일 03:00: 월~금)
-    - cron: '0 3 * * 1-5'
+    # 평일(월~금) 한국시간 09:00~20:30, 30분 간격 (UTC 당일 00:00~11:30: 월~금)
+    - cron: '*/30 0-11 * * 1-5'
+    # 평일(월~금) 한국시간 21:00 (UTC 당일 12:00: 월~금)
+    - cron: '0 12 * * 1-5'
   workflow_dispatch: # 수동 실행 가능
+
+# 실행이 겹치면 HMG 티켓이 중복 생성될 수 있어 직렬화한다.
+# 진행 중인 런은 끊지 않고, 대기 중이던 런은 GitHub이 최신 1건만 남긴다.
+concurrency:
+  group: daily-jira-sync
+  cancel-in-progress: false
 
 jobs:
   sync:
@@ -32,5 +40,7 @@ jobs:
           NEXT_PUBLIC_DB_URL: ${{ secrets.NEXT_PUBLIC_DB_URL }}
           NEXT_PUBLIC_DB_ANON_KEY: ${{ secrets.NEXT_PUBLIC_DB_ANON_KEY }}
           DB_SERVICE_ROLE_KEY: ${{ secrets.DB_SERVICE_ROLE_KEY }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          # 결과 메일 비활성화: 30분 간격이라 매 런 발송이면 하루 21통이 된다.
+          # 다시 켜려면 아래 한 줄을 되살리면 된다 (스크립트는 키 유무로만 분기한다).
+          # RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: npx tsx scripts/daily-sync.ts
