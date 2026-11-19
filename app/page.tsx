@@ -42,6 +42,7 @@ import {
 import { db } from '@/lib/db';
 import { jira } from '@/lib/services/jira';
 import { JiraIssue } from '@/lib/types/jira';
+import { useTeamUsers } from '@/hooks/use-team-users';
 
 const LOG_HIGHLIGHT_PATTERN =
   '([A-Z]+-\\d+|성공|실패|경고|오류|에러|동기화|완료)';
@@ -94,7 +95,7 @@ export default function Home() {
   const [syncSummary, setSyncSummary] = useState<SyncSummary | null>(null);
 
   // 팀 사용자 목록 (DB 조회)
-  const [teamUsers, setTeamUsers] = useState<{ name: string; igniteAccountId: string; hmgAccountId: string; hmgUserId: string }[]>([]);
+  const teamUsers = useTeamUsers(currentUser?.teamId);
 
   // 팀 동기화 대상 (DB 기반)
   interface TeamSyncTarget {
@@ -115,24 +116,6 @@ export default function Home() {
 
   useEffect(() => {
     if (!currentUser?.teamId) return;
-
-    // 사용자 목록 조회 (API route 경유 — users 테이블은 anon RLS 차단됨)
-    fetch('/api/users')
-      .then((r) => r.json())
-      .then((res: { success: boolean; data?: Array<{ name: string; teamId: string; igniteAccountId: string; hmgAccountId: string; hmgUserId: string }> }) => {
-        if (res.success && res.data) {
-          setTeamUsers(
-            res.data
-              .filter((u) => u.teamId === currentUser.teamId)
-              .map((u) => ({
-                name: u.name,
-                igniteAccountId: u.igniteAccountId || '',
-                hmgAccountId: u.hmgAccountId || '',
-                hmgUserId: u.hmgUserId || '',
-              }))
-          );
-        }
-      });
 
     // 팀 동기화 대상 + 필드 매핑 조회
     const loadTeamTargets = async () => {

@@ -38,9 +38,11 @@ import { jira } from '@/lib/services/jira';
 import { JiraIssue } from '@/lib/types/jira';
 import { SyncOrchestrator } from '@/lib/services/sync';
 import { TicketContentForm } from '@/components/ticket-content-form';
+import { useTeamUsers } from '@/hooks/use-team-users';
 
 export default function CreateTicketPage() {
   const { currentUser } = useCurrentUser();
+  const teamUsers = useTeamUsers(currentUser?.teamId);
 
   // 에픽 목록
   const [sourceEpics, setSourceEpics] = useState<JiraIssue[]>([]);
@@ -322,6 +324,7 @@ export default function CreateTicketPage() {
         ticketId,
         sourceProjectKey: sourceProject,
         chunkSize: 15,
+        teamUsers,
       });
 
       // 결과 처리
