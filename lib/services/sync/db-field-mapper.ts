@@ -162,6 +162,10 @@ export async function mapFieldsFromDb(
 
           if (hmgAccountId) {
             fields[target_field] = { accountId: hmgAccountId };
+          } else {
+            console.warn(
+              `[account_map] ${sourceTicket.key}: ${source_field}→${target_field} 계정 매핑 실패 (accountId=${maskAccountId(igniteAccountId)}) - 필드 제외`
+            );
           }
         }
         break;
@@ -179,6 +183,10 @@ export async function mapFieldsFromDb(
   }
 
   return fields;
+}
+
+function maskAccountId(accountId: string): string {
+  return accountId.length <= 6 ? '***' : `${accountId.slice(0, 6)}***`;
 }
 
 // 계정 매핑 캐시 (동기화 세션 동안 유지)
