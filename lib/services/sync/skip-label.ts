@@ -2,7 +2,11 @@
 
 export const DEFAULT_SKIP_LABEL = 'hmg-sync-skip';
 
-export function resolveSkipLabel(env: string | undefined = process.env.HMG_SYNC_SKIP_LABEL): string {
+// UI(브라우저) 동기화에서도 읽히도록 NEXT_PUBLIC_ 변수를 우선하고, 배치는 HMG_SYNC_SKIP_LABEL 도 허용
+export function resolveSkipLabel(
+  env: string | undefined = process.env.NEXT_PUBLIC_HMG_SYNC_SKIP_LABEL ||
+    process.env.HMG_SYNC_SKIP_LABEL
+): string {
   const trimmed = env?.trim();
   return trimmed ? trimmed : DEFAULT_SKIP_LABEL;
 }

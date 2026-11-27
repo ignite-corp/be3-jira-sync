@@ -517,14 +517,21 @@ export async function ensureTargetEpic(
     // 제외 라벨이 붙고 HMG 링크가 없는 에픽은 신규 생성·summary 매칭·write-back 모두 하지 않는다
     const skipLabel = resolveSkipLabel();
     const labels = await getSourceEpicLabels(sourceParent.key, logger);
-    if (hasSkipLabel(labels, skipLabel)) {
+    // labels 조회 실패(null)는 미러를 잘못 만드는 쪽이 더 위험하므로 라벨 있음으로 간주
+    if (labels === null || hasSkipLabel(labels, skipLabel)) {
       const linkValue = linkField
         ? await getSourceEpicLinkValue(sourceParent.key, linkField, logger)
         : '';
+      if (linkValue === null) {
+        logger.warning(
+          `${sourceParent.key}: 제외 라벨 판정 중 링크 조회 실패 - 이번 실행에서는 에픽 미러 처리 보류`
+        );
+        return null;
+      }
       if (
         shouldSkipMirrorCreation(
           hasTargetLinkValue(linkValue, targetProjectKey),
-          labels,
+          labels === null ? [skipLabel] : labels,
           skipLabel
         )
       ) {

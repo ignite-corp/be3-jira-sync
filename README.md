@@ -125,7 +125,7 @@ be3-jira-sync/
 - ✅ DB 프로필 기반 소스→타겟 동기화 (BE3 → HMG)
 - ✅ 필드/상태 매핑, 허용 에픽을 DB(설정 페이지)에서 관리
 - ✅ 에픽/티켓 지정 모드
-- ✅ 라벨 `hmg-sync-skip` 이 붙은 BE3 티켓은 HMG 미러를 새로 만들지 않음 (이미 링크된 티켓은 계속 동기화, 라벨명은 env `HMG_SYNC_SKIP_LABEL` 로 변경)
+- ✅ 라벨 `hmg-sync-skip` 이 붙은 BE3 티켓은 HMG 미러를 새로 만들지 않음 (이미 링크된 티켓은 계속 동기화, 라벨명은 env `NEXT_PUBLIC_HMG_SYNC_SKIP_LABEL`(UI·배치 공통, 배치는 `HMG_SYNC_SKIP_LABEL` 도 가능)로 변경)
 - ✅ 같은 라벨이 붙은 에픽도 HMG 에픽을 새로 만들지 않음(HMG 링크가 있으면 유지). 그런 에픽의 자식 티켓은 HMG 에픽 연결 없이 미러 생성
 - ✅ 스프린트 자동 매핑
 - ✅ 실시간 로그 및 결과 표시
