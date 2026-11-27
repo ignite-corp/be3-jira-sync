@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_SKIP_LABEL,
   hasSkipLabel,
+  normalizeLinkValue,
   resolveSkipLabel,
   shouldSkipMirrorCreation,
 } from './skip-label.ts';
@@ -48,4 +49,12 @@ test('라벨 있고 링크 있음 → 대상 유지', () => {
 test('라벨 없음 → 기존과 동일(제외 안 함)', () => {
   assert.equal(shouldSkipMirrorCreation(false, ['x'], DEFAULT_SKIP_LABEL), false);
   assert.equal(shouldSkipMirrorCreation(true, [], DEFAULT_SKIP_LABEL), false);
+});
+
+test('link 값 정규화: 문자열·배열·{ value }·그 외', () => {
+  assert.equal(normalizeLinkValue(' https://x/browse/HMG-1 '), 'https://x/browse/HMG-1');
+  assert.equal(normalizeLinkValue(['HMG-2']), 'HMG-2');
+  assert.equal(normalizeLinkValue({ value: 'HMG-3' }), 'HMG-3');
+  assert.equal(normalizeLinkValue(undefined), '');
+  assert.equal(normalizeLinkValue([]), '');
 });

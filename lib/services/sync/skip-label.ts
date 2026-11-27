@@ -21,3 +21,13 @@ export function shouldSkipMirrorCreation(
 ): boolean {
   return !hasTargetLink && hasSkipLabel(labels, skipLabel);
 }
+
+// link 필드 원시값(string | string[] | { value }) 을 문자열로 정규화 (hmg-sync.service 와 동일 규칙)
+export function normalizeLinkValue(raw: unknown): string {
+  if (typeof raw === 'string') return raw.trim();
+  if (Array.isArray(raw)) return raw[0] ? String(raw[0]).trim() : '';
+  if (raw && typeof raw === 'object' && 'value' in raw) {
+    return String((raw as { value?: unknown }).value ?? '').trim();
+  }
+  return '';
+}
