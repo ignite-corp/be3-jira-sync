@@ -115,7 +115,8 @@ async function getSourceEpicLabels(
   if (result.success && result.data) {
     labels = (result.data.fields as Record<string, unknown>).labels ?? [];
   } else {
-    logger.warning(`${sourceEpicKey}: labels 조회 실패 - 제외 라벨 없이 진행`);
+    logger.warning(`${sourceEpicKey}: labels 조회 실패`);
+    return null;
   }
   sourceEpicLabelsCache.set(sourceEpicKey, labels);
   return labels;
@@ -514,11 +515,17 @@ export async function ensureTargetEpic(
   }
 
   const promise = (async () => {
-    // 제외 라벨이 붙고 HMG 링크가 없는 에픽은 신규 생성·summary 매칭·write-back 모두 하지 않는다
+    // 제외 라벨 에픽: HMG 링크가 없으면 신규 생성·summary 매칭·write-back 모두 하지 않고,
+    // 링크가 있으면 링크 대상만 사용한다(조회 실패 시에도 새로 만들지 않음)
     const skipLabel = resolveSkipLabel();
     const labels = await getSourceEpicLabels(sourceParent.key, logger);
-    // labels 조회 실패(null)는 미러를 잘못 만드는 쪽이 더 위험하므로 라벨 있음으로 간주
-    if (labels === null || hasSkipLabel(labels, skipLabel)) {
+    if (labels === null) {
+      logger.warning(
+        `${sourceParent.key}: labels 조회 실패 - 제외 라벨 판정 불가로 이번 실행에서는 에픽 미러 처리 보류`
+      );
+      return null;
+    }
+    if (hasSkipLabel(labels, skipLabel)) {
       const linkValue = linkField
         ? await getSourceEpicLinkValue(sourceParent.key, linkField, logger)
         : '';
@@ -531,7 +538,7 @@ export async function ensureTargetEpic(
       if (
         shouldSkipMirrorCreation(
           hasTargetLinkValue(linkValue, targetProjectKey),
-          labels === null ? [skipLabel] : labels,
+          labels,
           skipLabel
         )
       ) {
@@ -541,6 +548,12 @@ export async function ensureTargetEpic(
         skippedEpicKeys.add(dedupKey);
         return null;
       }
+      return resolveEpicByLinkField(
+        sourceParent.key,
+        targetProjectKey,
+        linkField!,
+        logger
+      );
     }
 
     // 1) link field 우선 매칭

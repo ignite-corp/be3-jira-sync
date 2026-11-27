@@ -38,5 +38,5 @@ export function normalizeLinkValue(raw: unknown): string {
 
 // link 필드 값에 대상 프로젝트 키(예: HMG-123)가 있으면 이미 미러가 있는 것으로 본다
 export function hasTargetLinkValue(raw: unknown, targetProjectKey: string): boolean {
-  return new RegExp(`${targetProjectKey}-\\d+`).test(normalizeLinkValue(raw));
+  return new RegExp(`(?<![A-Za-z0-9_])${targetProjectKey}-\\d+`).test(normalizeLinkValue(raw));
 }

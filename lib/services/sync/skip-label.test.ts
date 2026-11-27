@@ -85,3 +85,8 @@ test('에픽: 다른 프로젝트 키 링크는 HMG 링크로 보지 않음', ()
 test('자식 티켓 판정은 부모 라벨과 무관 (자신의 라벨만 본다)', () => {
   assert.equal(shouldSkipMirrorCreation(false, [], DEFAULT_SKIP_LABEL), false);
 });
+
+test('프로젝트 키는 경계까지 일치해야 링크로 인식', () => {
+  assert.equal(hasTargetLinkValue('https://x/browse/OTHERHMG-1', 'HMG'), false);
+  assert.equal(hasTargetLinkValue('HMG-1', 'HMG'), true);
+});

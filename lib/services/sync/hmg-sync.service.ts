@@ -69,6 +69,7 @@ export class HMGSyncService {
     if (epicKey) {
       mappedFields[HMG_EPIC_LINK_FIELD] = epicKey;
     } else if (isEpicMirrorSkipped(parent.key, targetProjectKey)) {
+      delete mappedFields[HMG_EPIC_LINK_FIELD];
       this.logger.info(
         `${sourceTicket.key}: 부모 ${parent.key} 가 제외 라벨 에픽이라 HMG 에픽 연결 없이 생성`
       );
