@@ -520,12 +520,18 @@ export async function ensureTargetEpic(
     const skipLabel = resolveSkipLabel();
     const labels = await getSourceEpicLabels(sourceParent.key, logger);
     if (labels === null) {
-      logger.warning(
-        `${sourceParent.key}: labels 조회 실패 - 제외 라벨 판정 불가로 이번 실행에서는 에픽 미러 처리 보류`
-      );
-      return null;
+      // 라벨을 모르면 이미 링크된 에픽만 기존대로 진행하고, 링크 없는 에픽은 새로 만들지 않고 보류
+      const knownLink = linkField
+        ? await getSourceEpicLinkValue(sourceParent.key, linkField, logger)
+        : null;
+      if (!knownLink || !hasTargetLinkValue(knownLink, targetProjectKey)) {
+        logger.warning(
+          `${sourceParent.key}: labels 조회 실패 - 제외 라벨 판정 불가로 이번 실행에서는 에픽 미러 처리 보류`
+        );
+        return null;
+      }
     }
-    if (hasSkipLabel(labels, skipLabel)) {
+    if (labels !== null && hasSkipLabel(labels, skipLabel)) {
       const linkValue = linkField
         ? await getSourceEpicLinkValue(sourceParent.key, linkField, logger)
         : '';
