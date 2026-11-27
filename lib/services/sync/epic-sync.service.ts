@@ -82,6 +82,7 @@ async function fetchEpicIssue(
     'status',
     'description',
     'duedate',
+    'labels',
   ]);
   if (!result.success || !result.data) {
     logger.error(`${epicKey} 조회 실패: ${result.error}`);

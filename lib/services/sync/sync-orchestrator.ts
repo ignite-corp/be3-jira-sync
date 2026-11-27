@@ -17,7 +17,7 @@ import {
 } from './db-field-mapper';
 import { clearTransitionCache } from './transition-helper';
 import { clearEpicCache } from './epic-resolver';
-import { normalizeLinkValue, resolveSkipLabel, shouldSkipMirrorCreation } from './skip-label';
+import { hasTargetLinkValue, resolveSkipLabel, shouldSkipMirrorCreation } from './skip-label';
 import { jira } from '@/lib/services/jira';
 import { dbServer } from '@/lib/db';
 
@@ -404,9 +404,7 @@ export class SyncOrchestrator {
     const rawLink = profile.linkField
       ? ticket.fields[profile.linkField]
       : undefined;
-    const hasTargetLink = new RegExp(`${profile.targetProjectKey}-\\d+`).test(
-      normalizeLinkValue(rawLink)
-    );
+    const hasTargetLink = hasTargetLinkValue(rawLink, profile.targetProjectKey);
 
     // 제외 라벨: 신규 미러 생성만 막고, 이미 링크된 티켓은 계속 동기화
     const skipLabel = resolveSkipLabel();

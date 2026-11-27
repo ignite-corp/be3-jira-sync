@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_SKIP_LABEL,
   hasSkipLabel,
+  hasTargetLinkValue,
   normalizeLinkValue,
   resolveSkipLabel,
   shouldSkipMirrorCreation,
@@ -57,4 +58,30 @@ test('link 값 정규화: 문자열·배열·{ value }·그 외', () => {
   assert.equal(normalizeLinkValue({ value: 'HMG-3' }), 'HMG-3');
   assert.equal(normalizeLinkValue(undefined), '');
   assert.equal(normalizeLinkValue([]), '');
+});
+
+test('에픽: 라벨 있고 HMG 링크 없음 → 신규 생성 안 함', () => {
+  const link = '';
+  assert.equal(
+    shouldSkipMirrorCreation(hasTargetLinkValue(link, 'HMG'), ['hmg-sync-skip'], DEFAULT_SKIP_LABEL),
+    true
+  );
+});
+
+test('에픽: 라벨 있어도 HMG 링크 있으면 기존 동기화 유지', () => {
+  const link = 'https://jira.example/browse/HMG-77';
+  assert.equal(hasTargetLinkValue(link, 'HMG'), true);
+  assert.equal(
+    shouldSkipMirrorCreation(hasTargetLinkValue(link, 'HMG'), ['hmg-sync-skip'], DEFAULT_SKIP_LABEL),
+    false
+  );
+  assert.equal(hasTargetLinkValue({ value: link }, 'HMG'), true);
+});
+
+test('에픽: 다른 프로젝트 키 링크는 HMG 링크로 보지 않음', () => {
+  assert.equal(hasTargetLinkValue('https://x/browse/ABC-1', 'HMG'), false);
+});
+
+test('자식 티켓 판정은 부모 라벨과 무관 (자신의 라벨만 본다)', () => {
+  assert.equal(shouldSkipMirrorCreation(false, [], DEFAULT_SKIP_LABEL), false);
 });

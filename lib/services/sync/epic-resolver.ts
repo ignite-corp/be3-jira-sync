@@ -18,6 +18,12 @@ import { JIRA_ENDPOINTS } from '@/lib/constants/jira';
 import { SyncLogger } from './logger';
 import { stripAdfMediaNodes } from './field-mapper';
 import { syncStatusWithPathFromDb } from './transition-helper';
+import {
+  hasSkipLabel,
+  hasTargetLinkValue,
+  resolveSkipLabel,
+  shouldSkipMirrorCreation,
+} from './skip-label';
 
 const DEFAULT_EPIC_ISSUETYPE_ID = '10000'; // HMG Jira "에픽" 기본 id (프로젝트별 조회 실패 시 폴백)
 
@@ -42,6 +48,12 @@ const pendingSummaryResolves = new Map<string, Promise<string | null>>();
 // 소스 에픽 link field 값 캐시: `${sourceEpicKey}::${linkField}` → 필드 값 (빈 값은 '', 조회 실패는 null)
 const sourceEpicLinkValueCache = new Map<string, string | null>();
 
+// 소스 에픽 labels 캐시: sourceEpicKey → labels (조회 실패는 null)
+const sourceEpicLabelsCache = new Map<string, unknown>();
+
+// 제외 라벨로 HMG 미러 생성을 건너뛴 에픽: `${targetProjectKey}::${sourceEpicKey}`
+const skippedEpicKeys = new Set<string>();
+
 // link field write-back 직렬화: `${sourceEpicKey}::${linkField}` → 마지막 write Promise
 // (한 소스 에픽이 여러 타겟 프로젝트로 동시에 동기화될 때 read-modify-write 유실 방지)
 const linkWriteBackChains = new Map<string, Promise<void>>();
@@ -55,6 +67,8 @@ export function clearEpicCache() {
   pendingResolves.clear();
   pendingSummaryResolves.clear();
   sourceEpicLinkValueCache.clear();
+  sourceEpicLabelsCache.clear();
+  skippedEpicKeys.clear();
   linkWriteBackChains.clear();
   syncedStatusEpicKeys.clear();
 }
@@ -80,6 +94,31 @@ function normalizeLinkFieldValue(raw: unknown): string {
     return String((raw as { value?: unknown }).value ?? '').trim();
   }
   return '';
+}
+
+export function isEpicMirrorSkipped(
+  sourceEpicKey: string,
+  targetProjectKey: string
+): boolean {
+  return skippedEpicKeys.has(`${targetProjectKey}::${sourceEpicKey}`);
+}
+
+async function getSourceEpicLabels(
+  sourceEpicKey: string,
+  logger: SyncLogger
+): Promise<unknown> {
+  if (sourceEpicLabelsCache.has(sourceEpicKey)) {
+    return sourceEpicLabelsCache.get(sourceEpicKey);
+  }
+  const result = await jira.ignite.getIssue(sourceEpicKey, ['labels']);
+  let labels: unknown = null;
+  if (result.success && result.data) {
+    labels = (result.data.fields as Record<string, unknown>).labels ?? [];
+  } else {
+    logger.warning(`${sourceEpicKey}: labels 조회 실패 - 제외 라벨 없이 진행`);
+  }
+  sourceEpicLabelsCache.set(sourceEpicKey, labels);
+  return labels;
 }
 
 /**
@@ -475,6 +514,28 @@ export async function ensureTargetEpic(
   }
 
   const promise = (async () => {
+    // 제외 라벨이 붙고 HMG 링크가 없는 에픽은 신규 생성·summary 매칭·write-back 모두 하지 않는다
+    const skipLabel = resolveSkipLabel();
+    const labels = await getSourceEpicLabels(sourceParent.key, logger);
+    if (hasSkipLabel(labels, skipLabel)) {
+      const linkValue = linkField
+        ? await getSourceEpicLinkValue(sourceParent.key, linkField, logger)
+        : '';
+      if (
+        shouldSkipMirrorCreation(
+          hasTargetLinkValue(linkValue, targetProjectKey),
+          labels,
+          skipLabel
+        )
+      ) {
+        logger.info(
+          `${sourceParent.key}: ${skipLabel} 라벨로 HMG 에픽 미러 생성 제외`
+        );
+        skippedEpicKeys.add(dedupKey);
+        return null;
+      }
+    }
+
     // 1) link field 우선 매칭
     if (linkField) {
       const linkedKey = await resolveEpicByLinkField(
