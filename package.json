@@ -8,6 +8,8 @@
     "build": "next build --webpack",
     "start": "next start -p 7591",
     "start:network": "next start -H 0.0.0.0 -p 7591",
+    "test": "node --test lib/services/sync/skip-label.test.ts",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",

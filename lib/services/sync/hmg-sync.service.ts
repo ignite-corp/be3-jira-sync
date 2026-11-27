@@ -9,7 +9,7 @@ import { SyncOptions } from './types';
 import { syncStatusWithPathFromDb } from './transition-helper';
 import { jira } from '@/lib/services/jira';
 import { JIRA_ENDPOINTS } from '@/lib/constants/jira';
-import { ensureTargetEpic } from './epic-resolver';
+import { ensureTargetEpic, isEpicMirrorSkipped } from './epic-resolver';
 
 // HMG Jira의 Epic Link 커스텀 필드 (자식 → 부모 에픽 연결)
 const HMG_EPIC_LINK_FIELD = 'customfield_10014';
@@ -68,6 +68,11 @@ export class HMGSyncService {
     );
     if (epicKey) {
       mappedFields[HMG_EPIC_LINK_FIELD] = epicKey;
+    } else if (isEpicMirrorSkipped(parent.key, targetProjectKey)) {
+      delete mappedFields[HMG_EPIC_LINK_FIELD];
+      this.logger.info(
+        `${sourceTicket.key}: 부모 ${parent.key} 가 제외 라벨 에픽이라 HMG 에픽 연결 없이 생성`
+      );
     }
   }
 

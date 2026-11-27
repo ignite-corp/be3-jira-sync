@@ -17,6 +17,7 @@ import {
 } from './db-field-mapper';
 import { clearTransitionCache } from './transition-helper';
 import { clearEpicCache } from './epic-resolver';
+import { hasTargetLinkValue, resolveSkipLabel, shouldSkipMirrorCreation } from './skip-label';
 import { jira } from '@/lib/services/jira';
 import { dbServer } from '@/lib/db';
 
@@ -330,6 +331,7 @@ export class SyncOrchestrator {
       'issuetype',
       'parent',       // 에픽 분류
       'issuelinks',   // 타겟 프로젝트 분류
+      'labels',       // HMG 미러 신규 생성 제외 라벨
     ];
 
     const allSourceFields = new Set<string>(systemFields);
@@ -402,9 +404,14 @@ export class SyncOrchestrator {
     const rawLink = profile.linkField
       ? ticket.fields[profile.linkField]
       : undefined;
-    const hasTargetLink =
-      typeof rawLink === 'string' &&
-      new RegExp(`${profile.targetProjectKey}-\\d+`).test(rawLink);
+    const hasTargetLink = hasTargetLinkValue(rawLink, profile.targetProjectKey);
+
+    // 제외 라벨: 신규 미러 생성만 막고, 이미 링크된 티켓은 계속 동기화
+    const skipLabel = resolveSkipLabel();
+    if (shouldSkipMirrorCreation(hasTargetLink, ticket.fields.labels, skipLabel)) {
+      this.logger.info(`${ticket.key}: ${skipLabel} 라벨로 HMG 미러 생성 제외`);
+      return false;
+    }
 
     const parentKey = ticket.fields.parent?.key ?? '';
     const isAllowedEpic =

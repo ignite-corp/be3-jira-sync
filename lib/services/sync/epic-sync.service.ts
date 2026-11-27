@@ -7,7 +7,7 @@ import { JiraIssue } from '@/lib/types/jira';
 import { dbServer } from '@/lib/db';
 import { jira } from '@/lib/services/jira';
 import { SyncLogger } from './logger';
-import { ensureTargetEpic, clearEpicCache } from './epic-resolver';
+import { ensureTargetEpic, clearEpicCache, isEpicMirrorSkipped } from './epic-resolver';
 import {
   clearDbMappingCache,
   getSyncProfileInfo,
@@ -82,6 +82,7 @@ async function fetchEpicIssue(
     'status',
     'description',
     'duedate',
+    'labels',
   ]);
   if (!result.success || !result.data) {
     logger.error(`${epicKey} 조회 실패: ${result.error}`);
@@ -172,12 +173,14 @@ export async function executeEpicSync(
         profile.useEpicPrefix,
         profile.linkField
       );
+      const skipped =
+        !targetKey && isEpicMirrorSkipped(epic.key, profile.targetProjectKey);
       results.push({
         sourceKey: epic.key,
         sourceSummary: epic.fields.summary,
         targetProject: profile.targetProjectKey,
         targetKey,
-        success: !!targetKey,
+        success: !!targetKey || skipped,
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
